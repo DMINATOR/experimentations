@@ -356,9 +356,9 @@ function update() {
     velocityStep();
     densityStep();
 
-    // Decay - faster to clean stray particles
+    // Decay - gentle
     for (let i = 0; i < SIZE; i++) {
-        density[i] *= 0.99;
+        density[i] *= 0.995;
     }
 }
 
@@ -380,7 +380,7 @@ function render() {
 
             if (gi >= 0 && gi <= N + 1 && gj >= 0 && gj <= M + 1) {
                 const d = density[IX(gi, gj)];
-                if (d > 40) {
+                if (d > 25) {
                     data[idx] = 0;
                     data[idx + 1] = 0;
                     data[idx + 2] = 0;
