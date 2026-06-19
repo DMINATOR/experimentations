@@ -232,14 +232,14 @@ function playerInteract() {
         }
     }
 
-    // Player is also a density source (part of the fluid)
-    for (let di = -2; di <= 2; di++) {
-        for (let dj = -2; dj <= 2; dj++) {
+    // Player is also a density source (part of the fluid) - set directly so it's visible
+    for (let di = -3; di <= 3; di++) {
+        for (let dj = -3; dj <= 3; dj++) {
             const ci = gi + di;
             const cj = gj + dj;
             if (ci > 0 && ci <= N && cj > 0 && cj <= M) {
-                if (di * di + dj * dj <= 4) {
-                    densityPrev[IX(ci, cj)] += 40;
+                if (di * di + dj * dj <= 9) {
+                    density[IX(ci, cj)] = 100;
                 }
             }
         }
