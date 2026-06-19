@@ -271,9 +271,14 @@ function playerInteract() {
                 const dist = Math.sqrt(di * di + dj * dj);
                 if (dist < radius) {
                     const factor = (1 - dist / radius);
-                    vxPrev[IX(ci, cj)] += playerVx * factor * 6;
-                    vyPrev[IX(ci, cj)] += playerVy * factor * 6;
-                    density[IX(ci, cj)] *= (0.4 + dist / radius * 0.6);
+                    // Only push velocity outward from player, not in movement direction
+                    const nx = di / (dist + 0.01);
+                    const ny = dj / (dist + 0.01);
+                    const pushStrength = Math.sqrt(playerVx * playerVx + playerVy * playerVy);
+                    vxPrev[IX(ci, cj)] += nx * pushStrength * factor * 3;
+                    vyPrev[IX(ci, cj)] += ny * pushStrength * factor * 3;
+                    // Clear density around player
+                    density[IX(ci, cj)] *= (0.3 + dist / radius * 0.7);
                 }
             }
         }
@@ -351,9 +356,9 @@ function update() {
     velocityStep();
     densityStep();
 
-    // Decay
+    // Decay - faster to clean stray particles
     for (let i = 0; i < SIZE; i++) {
-        density[i] *= 0.996;
+        density[i] *= 0.99;
     }
 }
 
@@ -375,7 +380,7 @@ function render() {
 
             if (gi >= 0 && gi <= N + 1 && gj >= 0 && gj <= M + 1) {
                 const d = density[IX(gi, gj)];
-                if (d > 20) {
+                if (d > 40) {
                     data[idx] = 0;
                     data[idx + 1] = 0;
                     data[idx + 2] = 0;
