@@ -5,7 +5,7 @@ canvas.width = 832;
 canvas.height = 520;
 
 // --- World is much larger than the screen ---
-const SCALE = 4;
+const SCALE = 8;
 const WORLD_W = 2400; // world pixel width
 const WORLD_H = 1600; // world pixel height
 const N = Math.floor(WORLD_W / SCALE); // grid cols
