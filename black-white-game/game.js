@@ -4,310 +4,384 @@ const ctx = canvas.getContext('2d');
 canvas.width = 832;
 canvas.height = 520;
 
+// --- Fluid simulation grid (Jos Stam's Stable Fluids) ---
+const SCALE = 4; // each grid cell = 4px
+const N = Math.floor(canvas.width / SCALE);  // grid width
+const M = Math.floor(canvas.height / SCALE); // grid height
+const SIZE = (N + 2) * (M + 2); // include boundary cells
+
+// Fluid fields
+let density = new Float32Array(SIZE);
+let densityPrev = new Float32Array(SIZE);
+let vx = new Float32Array(SIZE);
+let vxPrev = new Float32Array(SIZE);
+let vy = new Float32Array(SIZE);
+let vyPrev = new Float32Array(SIZE);
+
+// Simulation parameters
+const DT = 0.1;
+const DIFFUSION = 0.0001;
+const VISCOSITY = 0.00001;
+const ITERATIONS = 4; // Gauss-Seidel iterations
+
+// --- Index helper ---
+function IX(x, y) {
+    return x + (N + 2) * y;
+}
+
+// --- Boundary conditions ---
+function setBoundary(b, field) {
+    for (let i = 1; i <= N; i++) {
+        field[IX(i, 0)] = b === 2 ? -field[IX(i, 1)] : field[IX(i, 1)];
+        field[IX(i, M + 1)] = b === 2 ? -field[IX(i, M)] : field[IX(i, M)];
+    }
+    for (let j = 1; j <= M; j++) {
+        field[IX(0, j)] = b === 1 ? -field[IX(1, j)] : field[IX(1, j)];
+        field[IX(N + 1, j)] = b === 1 ? -field[IX(N, j)] : field[IX(N, j)];
+    }
+    field[IX(0, 0)] = 0.5 * (field[IX(1, 0)] + field[IX(0, 1)]);
+    field[IX(0, M + 1)] = 0.5 * (field[IX(1, M + 1)] + field[IX(0, M)]);
+    field[IX(N + 1, 0)] = 0.5 * (field[IX(N, 0)] + field[IX(N + 1, 1)]);
+    field[IX(N + 1, M + 1)] = 0.5 * (field[IX(N, M + 1)] + field[IX(N + 1, M)]);
+}
+
+// --- Diffusion (implicit method) ---
+function diffuse(b, x, x0, diff, dt) {
+    const a = dt * diff * N * M;
+    for (let k = 0; k < ITERATIONS; k++) {
+        for (let j = 1; j <= M; j++) {
+            for (let i = 1; i <= N; i++) {
+                x[IX(i, j)] = (x0[IX(i, j)] + a * (
+                    x[IX(i - 1, j)] + x[IX(i + 1, j)] +
+                    x[IX(i, j - 1)] + x[IX(i, j + 1)]
+                )) / (1 + 4 * a);
+            }
+        }
+        setBoundary(b, x);
+    }
+}
+
+// --- Advection (semi-Lagrangian) ---
+function advect(b, d, d0, u, v, dt) {
+    const dt0x = dt * N;
+    const dt0y = dt * M;
+    for (let j = 1; j <= M; j++) {
+        for (let i = 1; i <= N; i++) {
+            let x = i - dt0x * u[IX(i, j)];
+            let y = j - dt0y * v[IX(i, j)];
+
+            if (x < 0.5) x = 0.5;
+            if (x > N + 0.5) x = N + 0.5;
+            if (y < 0.5) y = 0.5;
+            if (y > M + 0.5) y = M + 0.5;
+
+            const i0 = Math.floor(x);
+            const i1 = i0 + 1;
+            const j0 = Math.floor(y);
+            const j1 = j0 + 1;
+            const s1 = x - i0;
+            const s0 = 1 - s1;
+            const t1 = y - j0;
+            const t0 = 1 - t1;
+
+            d[IX(i, j)] = s0 * (t0 * d0[IX(i0, j0)] + t1 * d0[IX(i0, j1)]) +
+                          s1 * (t0 * d0[IX(i1, j0)] + t1 * d0[IX(i1, j1)]);
+        }
+    }
+    setBoundary(b, d);
+}
+
+// --- Projection (enforce incompressibility) ---
+function project(u, v, p, div) {
+    for (let j = 1; j <= M; j++) {
+        for (let i = 1; i <= N; i++) {
+            div[IX(i, j)] = -0.5 * (
+                (u[IX(i + 1, j)] - u[IX(i - 1, j)]) / N +
+                (v[IX(i, j + 1)] - v[IX(i, j - 1)]) / M
+            );
+            p[IX(i, j)] = 0;
+        }
+    }
+    setBoundary(0, div);
+    setBoundary(0, p);
+
+    for (let k = 0; k < ITERATIONS; k++) {
+        for (let j = 1; j <= M; j++) {
+            for (let i = 1; i <= N; i++) {
+                p[IX(i, j)] = (div[IX(i, j)] +
+                    p[IX(i - 1, j)] + p[IX(i + 1, j)] +
+                    p[IX(i, j - 1)] + p[IX(i, j + 1)]
+                ) / 4;
+            }
+        }
+        setBoundary(0, p);
+    }
+
+    for (let j = 1; j <= M; j++) {
+        for (let i = 1; i <= N; i++) {
+            u[IX(i, j)] -= 0.5 * N * (p[IX(i + 1, j)] - p[IX(i - 1, j)]);
+            v[IX(i, j)] -= 0.5 * M * (p[IX(i, j + 1)] - p[IX(i, j - 1)]);
+        }
+    }
+    setBoundary(1, u);
+    setBoundary(2, v);
+}
+
+// --- Full velocity step ---
+function velocityStep() {
+    // Add forces (vxPrev/vyPrev are source terms)
+    for (let i = 0; i < SIZE; i++) {
+        vx[i] += DT * vxPrev[i];
+        vy[i] += DT * vyPrev[i];
+    }
+    vxPrev.fill(0);
+    vyPrev.fill(0);
+
+    // Diffuse
+    [vx, vxPrev] = [vxPrev, vx];
+    diffuse(1, vx, vxPrev, VISCOSITY, DT);
+    [vy, vyPrev] = [vyPrev, vy];
+    diffuse(2, vy, vyPrev, VISCOSITY, DT);
+
+    // Project
+    project(vx, vy, vxPrev, vyPrev);
+
+    // Advect
+    [vx, vxPrev] = [vxPrev, vx];
+    [vy, vyPrev] = [vyPrev, vy];
+    advect(1, vx, vxPrev, vxPrev, vyPrev, DT);
+    advect(2, vy, vyPrev, vxPrev, vyPrev, DT);
+
+    // Project again
+    project(vx, vy, vxPrev, vyPrev);
+}
+
+// --- Full density step ---
+function densityStep() {
+    // Add sources
+    for (let i = 0; i < SIZE; i++) {
+        density[i] += DT * densityPrev[i];
+    }
+    densityPrev.fill(0);
+
+    // Diffuse
+    [density, densityPrev] = [densityPrev, density];
+    diffuse(0, density, densityPrev, DIFFUSION, DT);
+
+    // Advect
+    [density, densityPrev] = [densityPrev, density];
+    advect(0, density, densityPrev, vx, vy, DT);
+}
+
 // --- Player ---
 const player = {
-    x: 416,
-    y: 220,
+    x: canvas.width / 2,
+    y: canvas.height / 2 - 50,
     vx: 0,
     vy: 0,
-    wingPhase: 0,
-    r: 12
+    prevX: canvas.width / 2,
+    prevY: canvas.height / 2 - 50,
+    wingPhase: 0
 };
 
-const gravity = 0.18;
-const flapForce = -4.5;
-const moveSpeed = 2.8;
-const friction = 0.93;
+const pgravity = 0.2;
+const flapForce = -5;
+const pmoveSpeed = 3;
+const pfriction = 0.92;
 
 const keys = {};
 window.addEventListener('keydown', e => { keys[e.code] = true; e.preventDefault(); });
 window.addEventListener('keyup', e => keys[e.code] = false);
 
-// --- Fluid particles (dynamic, affected by physics) ---
-const particles = [];
-const PARTICLE_COUNT = 120;
-const PARTICLE_R = 10;
+// --- Inject density sources (border, ground, objects) ---
+function injectStaticSources() {
+    // Border
+    for (let i = 1; i <= N; i++) {
+        for (let t = 0; t < 6; t++) {
+            densityPrev[IX(i, 1 + t)] += 80;    // top
+            densityPrev[IX(i, M - t)] += 80;    // bottom
+        }
+    }
+    for (let j = 1; j <= M; j++) {
+        for (let t = 0; t < 6; t++) {
+            densityPrev[IX(1 + t, j)] += 80;    // left
+            densityPrev[IX(N - t, j)] += 80;    // right
+        }
+    }
 
-// Particle physics constants
-const P_GRAVITY = 0.1;
-const P_FRICTION = 0.97;
-const P_REPEL_DIST = 22;
-const P_REPEL_FORCE = 0.8;
-const P_ATTRACT_DIST = 50;
-const P_ATTRACT_FORCE = 0.02;
-const P_PLAYER_PUSH = 3.5;
-const GROUND_Y = 430;
+    // Ground (bottom third)
+    const groundRow = Math.floor(M * 0.78);
+    for (let j = groundRow; j <= M; j++) {
+        for (let i = 1; i <= N; i++) {
+            densityPrev[IX(i, j)] += 60;
+        }
+    }
 
-function initParticles() {
-    // Scatter particles along the ground and in clusters
-    for (let i = 0; i < PARTICLE_COUNT; i++) {
-        const x = 60 + Math.random() * (canvas.width - 120);
-        const y = GROUND_Y - Math.random() * 40;
-        particles.push({
-            x, y,
-            vx: 0, vy: 0,
-            r: PARTICLE_R + Math.random() * 4,
-            restY: y // where they "want" to settle
-        });
+    // Tombstone (column of density)
+    const t1i = Math.floor(N * 0.19);
+    for (let j = groundRow - 12; j <= groundRow; j++) {
+        densityPrev[IX(t1i, j)] += 50;
+        densityPrev[IX(t1i + 1, j)] += 50;
+        densityPrev[IX(t1i - 1, j)] += 50;
     }
-}
-initParticles();
-
-// --- Static blobs (border, ground base, objects) ---
-const staticBlobs = [];
-
-function addBorderBlobs() {
-    const spacing = 40;
-    for (let x = -20; x <= canvas.width + 20; x += spacing) {
-        staticBlobs.push({ x, y: -15, r: 35, type: 'border', ox: x, oy: -15, or: 35 });
-    }
-    for (let y = -20; y <= canvas.height + 20; y += spacing) {
-        staticBlobs.push({ x: -15, y, r: 35, type: 'border', ox: -15, oy: y, or: 35 });
-    }
-    for (let y = -20; y <= canvas.height + 20; y += spacing) {
-        staticBlobs.push({ x: canvas.width + 15, y, r: 35, type: 'border', ox: canvas.width + 15, oy: y, or: 35 });
-    }
-    for (let x = -20; x <= canvas.width + 20; x += spacing) {
-        staticBlobs.push({ x, y: canvas.height + 15, r: 30, type: 'border', ox: x, oy: canvas.height + 15, or: 30 });
-    }
-}
-
-function addGroundBlobs() {
-    for (let x = -30; x <= canvas.width + 30; x += 30) {
-        const yOff = Math.sin(x * 0.013) * 8;
-        staticBlobs.push({ x, y: GROUND_Y + 20 + yOff, r: 25, type: 'ground' });
-    }
-    for (let x = -30; x <= canvas.width + 30; x += 35) {
-        staticBlobs.push({ x, y: GROUND_Y + 55, r: 30, type: 'ground' });
-    }
-    for (let x = -30; x <= canvas.width + 30; x += 40) {
-        staticBlobs.push({ x, y: canvas.height + 5, r: 30, type: 'ground' });
-    }
-}
-
-function addObjectBlobs() {
-    // Tombstone
-    const t1 = 160;
-    staticBlobs.push({ x: t1, y: GROUND_Y + 5, r: 14, type: 'object' });
-    staticBlobs.push({ x: t1, y: GROUND_Y - 10, r: 12, type: 'object' });
-    staticBlobs.push({ x: t1, y: GROUND_Y - 23, r: 11, type: 'object' });
-    staticBlobs.push({ x: t1, y: GROUND_Y - 35, r: 10, type: 'object' });
 
     // Cross
-    const cx = 350;
-    staticBlobs.push({ x: cx, y: GROUND_Y + 5, r: 11, type: 'object' });
-    staticBlobs.push({ x: cx, y: GROUND_Y - 8, r: 10, type: 'object' });
-    staticBlobs.push({ x: cx, y: GROUND_Y - 20, r: 9, type: 'object' });
-    staticBlobs.push({ x: cx, y: GROUND_Y - 32, r: 9, type: 'object' });
-    staticBlobs.push({ x: cx - 14, y: GROUND_Y - 25, r: 7, type: 'object' });
-    staticBlobs.push({ x: cx + 14, y: GROUND_Y - 25, r: 7, type: 'object' });
+    const cxi = Math.floor(N * 0.42);
+    const cyj = groundRow - 10;
+    for (let j = groundRow - 15; j <= groundRow; j++) {
+        densityPrev[IX(cxi, j)] += 50;
+        densityPrev[IX(cxi + 1, j)] += 40;
+    }
+    // Cross arms
+    for (let i = cxi - 4; i <= cxi + 4; i++) {
+        densityPrev[IX(i, cyj)] += 50;
+        densityPrev[IX(i, cyj + 1)] += 40;
+    }
 
     // Spire
-    const sx = 560;
-    for (let i = 0; i < 6; i++) {
-        staticBlobs.push({ x: sx, y: GROUND_Y + 5 - i * 14, r: 11 - i * 0.8, type: 'object' });
-    }
-
-    // Mound
-    staticBlobs.push({ x: 700, y: GROUND_Y + 5, r: 12, type: 'object' });
-    staticBlobs.push({ x: 700, y: GROUND_Y - 8, r: 10, type: 'object' });
-}
-
-addBorderBlobs();
-addGroundBlobs();
-addObjectBlobs();
-
-// --- Particle physics ---
-function updateParticles() {
-    for (let i = 0; i < particles.length; i++) {
-        const p = particles[i];
-
-        // Gravity
-        p.vy += P_GRAVITY;
-
-        // Player interaction - push particles away
-        const dx = p.x - player.x;
-        const dy = p.y - player.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        const pushRadius = player.r + p.r + 15;
-
-        if (dist < pushRadius && dist > 0) {
-            const force = P_PLAYER_PUSH * (1 - dist / pushRadius);
-            const nx = dx / dist;
-            const ny = dy / dist;
-            p.vx += nx * force;
-            p.vy += ny * force;
-
-            // Also transfer player velocity to particles
-            p.vx += player.vx * 0.3;
-            p.vy += player.vy * 0.2;
-        }
-
-        // Particle-particle interaction
-        for (let j = i + 1; j < particles.length; j++) {
-            const q = particles[j];
-            const ddx = p.x - q.x;
-            const ddy = p.y - q.y;
-            const d = Math.sqrt(ddx * ddx + ddy * ddy);
-
-            if (d < P_REPEL_DIST && d > 0) {
-                // Repel when too close
-                const f = P_REPEL_FORCE * (1 - d / P_REPEL_DIST);
-                const nnx = ddx / d;
-                const nny = ddy / d;
-                p.vx += nnx * f;
-                p.vy += nny * f;
-                q.vx -= nnx * f;
-                q.vy -= nny * f;
-            } else if (d < P_ATTRACT_DIST && d > P_REPEL_DIST) {
-                // Weak attraction (cohesion)
-                const f = P_ATTRACT_FORCE;
-                const nnx = ddx / d;
-                const nny = ddy / d;
-                p.vx -= nnx * f;
-                p.vy -= nny * f;
-                q.vx += nnx * f;
-                q.vy += nny * f;
+    const sxi = Math.floor(N * 0.67);
+    for (let j = groundRow - 18; j <= groundRow; j++) {
+        const width = Math.max(1, Math.floor((groundRow - j) * 0.15));
+        for (let w = -width; w <= width; w++) {
+            if (sxi + w > 0 && sxi + w <= N) {
+                densityPrev[IX(sxi + w, j)] += 45;
             }
         }
+    }
+}
 
-        // Collision with static objects
-        for (const s of staticBlobs) {
-            if (s.type === 'border') continue; // borders handled by bounds
-            const sdx = p.x - s.x;
-            const sdy = p.y - s.y;
-            const sd = Math.sqrt(sdx * sdx + sdy * sdy);
-            const minDist = p.r + s.r * 0.6;
-            if (sd < minDist && sd > 0) {
-                const f = 1.5 * (1 - sd / minDist);
-                p.vx += (sdx / sd) * f;
-                p.vy += (sdy / sd) * f;
+// --- Player injects velocity into fluid ---
+function playerInteractWithFluid() {
+    const gi = Math.floor(player.x / SCALE);
+    const gj = Math.floor(player.y / SCALE);
+    const playerVx = player.x - player.prevX;
+    const playerVy = player.y - player.prevY;
+    const radius = 4;
+
+    for (let di = -radius; di <= radius; di++) {
+        for (let dj = -radius; dj <= radius; dj++) {
+            const ci = gi + di;
+            const cj = gj + dj;
+            if (ci > 0 && ci <= N && cj > 0 && cj <= M) {
+                const dist = Math.sqrt(di * di + dj * dj);
+                if (dist < radius) {
+                    const factor = (1 - dist / radius) * 5;
+                    vxPrev[IX(ci, cj)] += playerVx * factor;
+                    vyPrev[IX(ci, cj)] += playerVy * factor;
+                    // Player also pushes density away
+                    density[IX(ci, cj)] *= 0.7;
+                }
             }
         }
-
-        // Friction
-        p.vx *= P_FRICTION;
-        p.vy *= P_FRICTION;
-
-        // Move
-        p.x += p.vx;
-        p.y += p.vy;
-
-        // Ground collision
-        if (p.y > GROUND_Y + 10) {
-            p.y = GROUND_Y + 10;
-            p.vy *= -0.3;
-            p.vx *= 0.9;
-        }
-
-        // Walls
-        if (p.x < 50) { p.x = 50; p.vx *= -0.5; }
-        if (p.x > canvas.width - 50) { p.x = canvas.width - 50; p.vx *= -0.5; }
-        if (p.y < 50) { p.y = 50; p.vy *= -0.3; }
     }
-}
 
-// --- Border animation ---
-let time = 0;
-function animateBorderBlobs() {
-    for (let i = 0; i < staticBlobs.length; i++) {
-        const b = staticBlobs[i];
-        if (b.type === 'border') {
-            b.x = b.ox + Math.sin(time * 0.5 + i * 0.4) * 6;
-            b.y = b.oy + Math.cos(time * 0.4 + i * 0.6) * 5;
-            b.r = b.or + Math.sin(time * 0.8 + i * 0.3) * 3;
+    // Also add density for the player blob itself
+    for (let di = -2; di <= 2; di++) {
+        for (let dj = -2; dj <= 2; dj++) {
+            const ci = gi + di;
+            const cj = gj + dj;
+            if (ci > 0 && ci <= N && cj > 0 && cj <= M) {
+                densityPrev[IX(ci, cj)] += 30;
+            }
+        }
+    }
+
+    // Wing blobs
+    const wingY = Math.sin(player.wingPhase) * 3;
+    const wings = [
+        { dx: -18, dy: -2 + wingY },
+        { dx: 18, dy: -2 + wingY },
+    ];
+    for (const w of wings) {
+        const wi = Math.floor((player.x + w.dx) / SCALE);
+        const wj = Math.floor((player.y + w.dy) / SCALE);
+        if (wi > 0 && wi <= N && wj > 0 && wj <= M) {
+            densityPrev[IX(wi, wj)] += 25;
+            densityPrev[IX(wi + 1, wj)] += 20;
+            densityPrev[IX(wi - 1, wj)] += 20;
         }
     }
 }
 
-// --- Player collision with ground/objects ---
-function playerCollision() {
-    for (const s of staticBlobs) {
-        if (s.type === 'border') continue;
-        const dx = player.x - s.x;
-        const dy = player.y - s.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        const minDist = player.r + s.r * 0.5;
-        if (dist < minDist && dist > 0) {
-            const push = (minDist - dist) * 0.5;
-            player.x += (dx / dist) * push;
-            player.y += (dy / dist) * push;
-            player.vy *= -0.2;
-            player.vx *= 0.7;
+// --- Simple collision: prevent player from going into high-density areas ---
+function playerFluidCollision() {
+    const gi = Math.floor(player.x / SCALE);
+    const gj = Math.floor(player.y / SCALE);
+    // Check density below player
+    if (gi > 0 && gi <= N && gj > 0 && gj <= M) {
+        const belowDensity = density[IX(gi, gj + 2)] || 0;
+        if (belowDensity > 50 && player.vy > 0) {
+            player.vy *= -0.3;
+            player.y -= 2;
         }
     }
 }
 
 // --- Update ---
 function update() {
-    time += 0.016;
-    animateBorderBlobs();
+    player.prevX = player.x;
+    player.prevY = player.y;
 
-    if (keys['ArrowLeft'] || keys['KeyA']) player.vx -= moveSpeed * 0.18;
-    if (keys['ArrowRight'] || keys['KeyD']) player.vx += moveSpeed * 0.18;
+    if (keys['ArrowLeft'] || keys['KeyA']) player.vx -= pmoveSpeed * 0.18;
+    if (keys['ArrowRight'] || keys['KeyD']) player.vx += pmoveSpeed * 0.18;
     if (keys['ArrowUp'] || keys['KeyW'] || keys['Space']) {
         player.vy = flapForce;
     }
 
-    player.vy += gravity;
-    player.vx *= friction;
+    player.vy += pgravity;
+    player.vx *= pfriction;
     player.x += player.vx;
     player.y += player.vy;
 
-    playerCollision();
-
     // Bounds
-    if (player.x < 70) { player.x = 70; player.vx = 0; }
-    if (player.x > canvas.width - 70) { player.x = canvas.width - 70; player.vx = 0; }
-    if (player.y < 70) { player.y = 70; player.vy = 0; }
-    if (player.y > canvas.height - 80) { player.y = canvas.height - 80; player.vy = 0; }
+    if (player.x < 50) { player.x = 50; player.vx = 0; }
+    if (player.x > canvas.width - 50) { player.x = canvas.width - 50; player.vx = 0; }
+    if (player.y < 50) { player.y = 50; player.vy = 0; }
+    if (player.y > canvas.height - 70) { player.y = canvas.height - 70; player.vy = 0; }
 
     player.wingPhase += 0.2;
 
-    updateParticles();
+    playerFluidCollision();
+
+    // Fluid simulation
+    injectStaticSources();
+    playerInteractWithFluid();
+    velocityStep();
+    densityStep();
+
+    // Density decay (prevents buildup)
+    for (let i = 0; i < SIZE; i++) {
+        density[i] *= 0.98;
+    }
 }
 
-// --- Render ---
+// --- Render density field ---
 function render() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const imageData = ctx.createImageData(canvas.width, canvas.height);
+    const data = imageData.data;
 
-    ctx.fillStyle = '#000';
+    for (let py = 0; py < canvas.height; py++) {
+        const gj = Math.floor(py / SCALE);
+        for (let px = 0; px < canvas.width; px++) {
+            const gi = Math.floor(px / SCALE);
+            const d = density[IX(gi, gj)];
+            const idx = (py * canvas.width + px) * 4;
 
-    // Static blobs
-    for (const b of staticBlobs) {
-        ctx.beginPath();
-        ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
-        ctx.fill();
+            // Threshold: high density = black, low = white
+            if (d > 15) {
+                data[idx] = 0;
+                data[idx + 1] = 0;
+                data[idx + 2] = 0;
+            } else {
+                data[idx] = 255;
+                data[idx + 1] = 255;
+                data[idx + 2] = 255;
+            }
+            data[idx + 3] = 255;
+        }
     }
 
-    // Dynamic fluid particles
-    for (const p of particles) {
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-        ctx.fill();
-    }
-
-    // Player blobs
-    const wingY = Math.sin(player.wingPhase) * 5;
-    // Body
-    ctx.beginPath();
-    ctx.arc(player.x, player.y, player.r, 0, Math.PI * 2);
-    ctx.fill();
-    // Wings
-    ctx.beginPath();
-    ctx.arc(player.x - 18, player.y - 2 + wingY, 8, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(player.x + 18, player.y - 2 + wingY, 8, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(player.x - 10, player.y + wingY * 0.5, 9, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(player.x + 10, player.y + wingY * 0.5, 9, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.putImageData(imageData, 0, 0);
 }
 
 function gameLoop() {
