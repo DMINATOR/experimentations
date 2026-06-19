@@ -4,13 +4,12 @@ const ctx = canvas.getContext('2d');
 canvas.width = 832;
 canvas.height = 520;
 
-// --- Fluid simulation grid (Jos Stam's Stable Fluids) ---
-const SCALE = 4; // each grid cell = 4px
-const N = Math.floor(canvas.width / SCALE);  // grid width
-const M = Math.floor(canvas.height / SCALE); // grid height
-const SIZE = (N + 2) * (M + 2); // include boundary cells
+// --- Navier-Stokes grid ---
+const SCALE = 4;
+const N = Math.floor(canvas.width / SCALE);
+const M = Math.floor(canvas.height / SCALE);
+const SIZE = (N + 2) * (M + 2);
 
-// Fluid fields
 let density = new Float32Array(SIZE);
 let densityPrev = new Float32Array(SIZE);
 let vx = new Float32Array(SIZE);
@@ -18,18 +17,13 @@ let vxPrev = new Float32Array(SIZE);
 let vy = new Float32Array(SIZE);
 let vyPrev = new Float32Array(SIZE);
 
-// Simulation parameters
-const DT = 0.1;
-const DIFFUSION = 0.0001;
-const VISCOSITY = 0.00001;
-const ITERATIONS = 4; // Gauss-Seidel iterations
+const DT = 0.15;
+const DIFFUSION = 0.0002;
+const VISCOSITY = 0.00005;
+const ITERATIONS = 4;
 
-// --- Index helper ---
-function IX(x, y) {
-    return x + (N + 2) * y;
-}
+function IX(x, y) { return x + (N + 2) * y; }
 
-// --- Boundary conditions ---
 function setBoundary(b, field) {
     for (let i = 1; i <= N; i++) {
         field[IX(i, 0)] = b === 2 ? -field[IX(i, 1)] : field[IX(i, 1)];
@@ -45,7 +39,6 @@ function setBoundary(b, field) {
     field[IX(N + 1, M + 1)] = 0.5 * (field[IX(N, M + 1)] + field[IX(N + 1, M)]);
 }
 
-// --- Diffusion (implicit method) ---
 function diffuse(b, x, x0, diff, dt) {
     const a = dt * diff * N * M;
     for (let k = 0; k < ITERATIONS; k++) {
@@ -61,7 +54,6 @@ function diffuse(b, x, x0, diff, dt) {
     }
 }
 
-// --- Advection (semi-Lagrangian) ---
 function advect(b, d, d0, u, v, dt) {
     const dt0x = dt * N;
     const dt0y = dt * M;
@@ -69,21 +61,14 @@ function advect(b, d, d0, u, v, dt) {
         for (let i = 1; i <= N; i++) {
             let x = i - dt0x * u[IX(i, j)];
             let y = j - dt0y * v[IX(i, j)];
-
             if (x < 0.5) x = 0.5;
             if (x > N + 0.5) x = N + 0.5;
             if (y < 0.5) y = 0.5;
             if (y > M + 0.5) y = M + 0.5;
-
-            const i0 = Math.floor(x);
-            const i1 = i0 + 1;
-            const j0 = Math.floor(y);
-            const j1 = j0 + 1;
-            const s1 = x - i0;
-            const s0 = 1 - s1;
-            const t1 = y - j0;
-            const t0 = 1 - t1;
-
+            const i0 = Math.floor(x), i1 = i0 + 1;
+            const j0 = Math.floor(y), j1 = j0 + 1;
+            const s1 = x - i0, s0 = 1 - s1;
+            const t1 = y - j0, t0 = 1 - t1;
             d[IX(i, j)] = s0 * (t0 * d0[IX(i0, j0)] + t1 * d0[IX(i0, j1)]) +
                           s1 * (t0 * d0[IX(i1, j0)] + t1 * d0[IX(i1, j1)]);
         }
@@ -91,7 +76,6 @@ function advect(b, d, d0, u, v, dt) {
     setBoundary(b, d);
 }
 
-// --- Projection (enforce incompressibility) ---
 function project(u, v, p, div) {
     for (let j = 1; j <= M; j++) {
         for (let i = 1; i <= N; i++) {
@@ -104,7 +88,6 @@ function project(u, v, p, div) {
     }
     setBoundary(0, div);
     setBoundary(0, p);
-
     for (let k = 0; k < ITERATIONS; k++) {
         for (let j = 1; j <= M; j++) {
             for (let i = 1; i <= N; i++) {
@@ -116,7 +99,6 @@ function project(u, v, p, div) {
         }
         setBoundary(0, p);
     }
-
     for (let j = 1; j <= M; j++) {
         for (let i = 1; i <= N; i++) {
             u[IX(i, j)] -= 0.5 * N * (p[IX(i + 1, j)] - p[IX(i - 1, j)]);
@@ -127,9 +109,7 @@ function project(u, v, p, div) {
     setBoundary(2, v);
 }
 
-// --- Full velocity step ---
 function velocityStep() {
-    // Add forces (vxPrev/vyPrev are source terms)
     for (let i = 0; i < SIZE; i++) {
         vx[i] += DT * vxPrev[i];
         vy[i] += DT * vyPrev[i];
@@ -137,126 +117,102 @@ function velocityStep() {
     vxPrev.fill(0);
     vyPrev.fill(0);
 
-    // Diffuse
     [vx, vxPrev] = [vxPrev, vx];
     diffuse(1, vx, vxPrev, VISCOSITY, DT);
     [vy, vyPrev] = [vyPrev, vy];
     diffuse(2, vy, vyPrev, VISCOSITY, DT);
-
-    // Project
     project(vx, vy, vxPrev, vyPrev);
 
-    // Advect
     [vx, vxPrev] = [vxPrev, vx];
     [vy, vyPrev] = [vyPrev, vy];
     advect(1, vx, vxPrev, vxPrev, vyPrev, DT);
     advect(2, vy, vyPrev, vxPrev, vyPrev, DT);
-
-    // Project again
     project(vx, vy, vxPrev, vyPrev);
 }
 
-// --- Full density step ---
 function densityStep() {
-    // Add sources
     for (let i = 0; i < SIZE; i++) {
         density[i] += DT * densityPrev[i];
     }
     densityPrev.fill(0);
 
-    // Diffuse
     [density, densityPrev] = [densityPrev, density];
     diffuse(0, density, densityPrev, DIFFUSION, DT);
 
-    // Advect
     [density, densityPrev] = [densityPrev, density];
     advect(0, density, densityPrev, vx, vy, DT);
 }
 
-// --- Player ---
+// --- Player (top-down, free movement) ---
 const player = {
     x: canvas.width / 2,
-    y: canvas.height / 2 - 50,
+    y: canvas.height / 2,
     vx: 0,
     vy: 0,
     prevX: canvas.width / 2,
-    prevY: canvas.height / 2 - 50,
-    wingPhase: 0
+    prevY: canvas.height / 2
 };
 
-const pgravity = 0.2;
-const flapForce = -5;
-const pmoveSpeed = 3;
-const pfriction = 0.92;
+const pmoveSpeed = 3.5;
+const pfriction = 0.88;
 
 const keys = {};
 window.addEventListener('keydown', e => { keys[e.code] = true; e.preventDefault(); });
 window.addEventListener('keyup', e => keys[e.code] = false);
 
-// --- Inject density sources (border, ground, objects) ---
-function injectStaticSources() {
-    // Border
+// --- Density sources: border ring + scattered objects ---
+function injectSources() {
+    const borderWidth = 8;
+
+    // Border ring - constant source of fluid creeping inward
     for (let i = 1; i <= N; i++) {
-        for (let t = 0; t < 6; t++) {
-            densityPrev[IX(i, 1 + t)] += 80;    // top
-            densityPrev[IX(i, M - t)] += 80;    // bottom
+        for (let t = 0; t < borderWidth; t++) {
+            density[IX(i, 1 + t)] = 100;
+            density[IX(i, M - t)] = 100;
         }
     }
     for (let j = 1; j <= M; j++) {
-        for (let t = 0; t < 6; t++) {
-            densityPrev[IX(1 + t, j)] += 80;    // left
-            densityPrev[IX(N - t, j)] += 80;    // right
+        for (let t = 0; t < borderWidth; t++) {
+            density[IX(1 + t, j)] = 100;
+            density[IX(N - t, j)] = 100;
         }
     }
 
-    // Ground (bottom third)
-    const groundRow = Math.floor(M * 0.78);
-    for (let j = groundRow; j <= M; j++) {
-        for (let i = 1; i <= N; i++) {
-            densityPrev[IX(i, j)] += 60;
-        }
-    }
+    // Objects: fixed density blobs in the world
+    // These are like "islands" of fluid in the play area
+    const objects = [
+        { cx: N * 0.25, cy: M * 0.6, r: 5 },
+        { cx: N * 0.4, cy: M * 0.35, r: 4 },
+        { cx: N * 0.65, cy: M * 0.7, r: 6 },
+        { cx: N * 0.75, cy: M * 0.3, r: 4 },
+        { cx: N * 0.15, cy: M * 0.3, r: 3 },
+        { cx: N * 0.85, cy: M * 0.55, r: 5 },
+    ];
 
-    // Tombstone (column of density)
-    const t1i = Math.floor(N * 0.19);
-    for (let j = groundRow - 12; j <= groundRow; j++) {
-        densityPrev[IX(t1i, j)] += 50;
-        densityPrev[IX(t1i + 1, j)] += 50;
-        densityPrev[IX(t1i - 1, j)] += 50;
-    }
-
-    // Cross
-    const cxi = Math.floor(N * 0.42);
-    const cyj = groundRow - 10;
-    for (let j = groundRow - 15; j <= groundRow; j++) {
-        densityPrev[IX(cxi, j)] += 50;
-        densityPrev[IX(cxi + 1, j)] += 40;
-    }
-    // Cross arms
-    for (let i = cxi - 4; i <= cxi + 4; i++) {
-        densityPrev[IX(i, cyj)] += 50;
-        densityPrev[IX(i, cyj + 1)] += 40;
-    }
-
-    // Spire
-    const sxi = Math.floor(N * 0.67);
-    for (let j = groundRow - 18; j <= groundRow; j++) {
-        const width = Math.max(1, Math.floor((groundRow - j) * 0.15));
-        for (let w = -width; w <= width; w++) {
-            if (sxi + w > 0 && sxi + w <= N) {
-                densityPrev[IX(sxi + w, j)] += 45;
+    for (const obj of objects) {
+        const cx = Math.floor(obj.cx);
+        const cy = Math.floor(obj.cy);
+        for (let di = -obj.r; di <= obj.r; di++) {
+            for (let dj = -obj.r; dj <= obj.r; dj++) {
+                if (di * di + dj * dj <= obj.r * obj.r) {
+                    const i = cx + di;
+                    const j = cy + dj;
+                    if (i > 0 && i <= N && j > 0 && j <= M) {
+                        density[IX(i, j)] = 80;
+                    }
+                }
             }
         }
     }
 }
 
-// --- Player injects velocity into fluid ---
-function playerInteractWithFluid() {
+// --- Player interacts with fluid ---
+function playerInteract() {
     const gi = Math.floor(player.x / SCALE);
     const gj = Math.floor(player.y / SCALE);
     const playerVx = player.x - player.prevX;
     const playerVy = player.y - player.prevY;
-    const radius = 4;
+    const radius = 5;
 
     for (let di = -radius; di <= radius; di++) {
         for (let dj = -radius; dj <= radius; dj++) {
@@ -265,54 +221,27 @@ function playerInteractWithFluid() {
             if (ci > 0 && ci <= N && cj > 0 && cj <= M) {
                 const dist = Math.sqrt(di * di + dj * dj);
                 if (dist < radius) {
-                    const factor = (1 - dist / radius) * 5;
-                    vxPrev[IX(ci, cj)] += playerVx * factor;
-                    vyPrev[IX(ci, cj)] += playerVy * factor;
-                    // Player also pushes density away
-                    density[IX(ci, cj)] *= 0.7;
+                    const factor = (1 - dist / radius);
+                    // Push fluid velocity in player's direction
+                    vxPrev[IX(ci, cj)] += playerVx * factor * 8;
+                    vyPrev[IX(ci, cj)] += playerVy * factor * 8;
+                    // Player carves through - reduce density
+                    density[IX(ci, cj)] *= (0.5 + dist / radius * 0.5);
                 }
             }
         }
     }
 
-    // Also add density for the player blob itself
+    // Player is also a density source (part of the fluid)
     for (let di = -2; di <= 2; di++) {
         for (let dj = -2; dj <= 2; dj++) {
             const ci = gi + di;
             const cj = gj + dj;
             if (ci > 0 && ci <= N && cj > 0 && cj <= M) {
-                densityPrev[IX(ci, cj)] += 30;
+                if (di * di + dj * dj <= 4) {
+                    densityPrev[IX(ci, cj)] += 40;
+                }
             }
-        }
-    }
-
-    // Wing blobs
-    const wingY = Math.sin(player.wingPhase) * 3;
-    const wings = [
-        { dx: -18, dy: -2 + wingY },
-        { dx: 18, dy: -2 + wingY },
-    ];
-    for (const w of wings) {
-        const wi = Math.floor((player.x + w.dx) / SCALE);
-        const wj = Math.floor((player.y + w.dy) / SCALE);
-        if (wi > 0 && wi <= N && wj > 0 && wj <= M) {
-            densityPrev[IX(wi, wj)] += 25;
-            densityPrev[IX(wi + 1, wj)] += 20;
-            densityPrev[IX(wi - 1, wj)] += 20;
-        }
-    }
-}
-
-// --- Simple collision: prevent player from going into high-density areas ---
-function playerFluidCollision() {
-    const gi = Math.floor(player.x / SCALE);
-    const gj = Math.floor(player.y / SCALE);
-    // Check density below player
-    if (gi > 0 && gi <= N && gj > 0 && gj <= M) {
-        const belowDensity = density[IX(gi, gj + 2)] || 0;
-        if (belowDensity > 50 && player.vy > 0) {
-            player.vy *= -0.3;
-            player.y -= 2;
         }
     }
 }
@@ -322,40 +251,37 @@ function update() {
     player.prevX = player.x;
     player.prevY = player.y;
 
-    if (keys['ArrowLeft'] || keys['KeyA']) player.vx -= pmoveSpeed * 0.18;
-    if (keys['ArrowRight'] || keys['KeyD']) player.vx += pmoveSpeed * 0.18;
-    if (keys['ArrowUp'] || keys['KeyW'] || keys['Space']) {
-        player.vy = flapForce;
-    }
+    // 8-directional top-down movement
+    if (keys['ArrowLeft'] || keys['KeyA']) player.vx -= pmoveSpeed * 0.2;
+    if (keys['ArrowRight'] || keys['KeyD']) player.vx += pmoveSpeed * 0.2;
+    if (keys['ArrowUp'] || keys['KeyW']) player.vy -= pmoveSpeed * 0.2;
+    if (keys['ArrowDown'] || keys['KeyS']) player.vy += pmoveSpeed * 0.2;
 
-    player.vy += pgravity;
     player.vx *= pfriction;
+    player.vy *= pfriction;
     player.x += player.vx;
     player.y += player.vy;
 
     // Bounds
-    if (player.x < 50) { player.x = 50; player.vx = 0; }
-    if (player.x > canvas.width - 50) { player.x = canvas.width - 50; player.vx = 0; }
-    if (player.y < 50) { player.y = 50; player.vy = 0; }
-    if (player.y > canvas.height - 70) { player.y = canvas.height - 70; player.vy = 0; }
+    const margin = 40;
+    if (player.x < margin) { player.x = margin; player.vx = 0; }
+    if (player.x > canvas.width - margin) { player.x = canvas.width - margin; player.vx = 0; }
+    if (player.y < margin) { player.y = margin; player.vy = 0; }
+    if (player.y > canvas.height - margin) { player.y = canvas.height - margin; player.vy = 0; }
 
-    player.wingPhase += 0.2;
-
-    playerFluidCollision();
-
-    // Fluid simulation
-    injectStaticSources();
-    playerInteractWithFluid();
+    // Fluid
+    injectSources();
+    playerInteract();
     velocityStep();
     densityStep();
 
-    // Density decay (prevents buildup)
+    // Gentle global decay to prevent over-saturation
     for (let i = 0; i < SIZE; i++) {
-        density[i] *= 0.98;
+        density[i] *= 0.995;
     }
 }
 
-// --- Render density field ---
+// --- Render ---
 function render() {
     const imageData = ctx.createImageData(canvas.width, canvas.height);
     const data = imageData.data;
@@ -367,8 +293,7 @@ function render() {
             const d = density[IX(gi, gj)];
             const idx = (py * canvas.width + px) * 4;
 
-            // Threshold: high density = black, low = white
-            if (d > 15) {
+            if (d > 20) {
                 data[idx] = 0;
                 data[idx + 1] = 0;
                 data[idx + 2] = 0;
