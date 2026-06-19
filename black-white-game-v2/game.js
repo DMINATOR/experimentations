@@ -151,16 +151,15 @@ function physicsStep() {
             const overlap = pushRadius + obj.r - dist;
             const nx = dx / dist;
             const ny = dy / dist;
-            // Push force proportional to overlap and player speed
             const speed = Math.sqrt(player.vx * player.vx + player.vy * player.vy);
-            const force = overlap * 0.05 + speed * 0.3;
+            const force = overlap * 0.01 + speed * 0.08;
             obj.vx += nx * force;
             obj.vy += ny * force;
         }
 
-        // Object friction/drag
-        obj.vx *= 0.92;
-        obj.vy *= 0.92;
+        // Object friction/drag (heavy, resists movement)
+        obj.vx *= 0.85;
+        obj.vy *= 0.85;
         obj.x += obj.vx;
         obj.y += obj.vy;
 
