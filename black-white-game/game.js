@@ -4,18 +4,7 @@ const ctx = canvas.getContext('2d');
 canvas.width = 832;
 canvas.height = 520;
 
-// Half-res for performance
-const SCALE = 3;
-const W = Math.ceil(canvas.width / SCALE);
-const H = Math.ceil(canvas.height / SCALE);
-const offscreen = document.createElement('canvas');
-offscreen.width = W;
-offscreen.height = H;
-const offCtx = offscreen.getContext('2d');
-
-const THRESHOLD = 1.0;
-
-// --- Player state (controls the player blobs) ---
+// --- Player ---
 const player = {
     x: 416,
     y: 250,
@@ -24,96 +13,90 @@ const player = {
     wingPhase: 0
 };
 
-const gravity = 0.12;
-const flapForce = -3.5;
-const moveSpeed = 2;
+const gravity = 0.18;
+const flapForce = -4.5;
+const moveSpeed = 2.5;
 const friction = 0.93;
 
 const keys = {};
 window.addEventListener('keydown', e => { keys[e.code] = true; e.preventDefault(); });
 window.addEventListener('keyup', e => keys[e.code] = false);
 
-// --- ALL blobs in the world (player is also blobs) ---
+// --- All blobs (circles that merge via CSS blur+contrast) ---
 const blobs = [];
-
-// Player blobs - these get repositioned every frame
 const playerBlobs = [];
+
 function createPlayerBlobs() {
-    // Body (center)
-    playerBlobs.push({ x: 0, y: 0, r: 14, s: 1 });
-    // Left wing tip
-    playerBlobs.push({ x: -20, y: -3, r: 9, s: 1 });
-    // Right wing tip
-    playerBlobs.push({ x: 20, y: -3, r: 9, s: 1 });
-    // Left wing mid
-    playerBlobs.push({ x: -11, y: -1, r: 10, s: 1 });
-    // Right wing mid
-    playerBlobs.push({ x: 11, y: -1, r: 10, s: 1 });
-
-    // Add to global blob list
-    for (const pb of playerBlobs) {
-        blobs.push(pb);
-    }
+    // Body
+    playerBlobs.push({ ox: 0, oy: 0, r: 12 });
+    // Wings
+    playerBlobs.push({ ox: -18, oy: -2, r: 8 });
+    playerBlobs.push({ ox: 18, oy: -2, r: 8 });
+    playerBlobs.push({ ox: -10, oy: 0, r: 9 });
+    playerBlobs.push({ ox: 10, oy: 0, r: 9 });
 }
 
-// Border blobs
 function addBorderBlobs() {
-    const spacing = 65;
-    for (let x = -80; x <= canvas.width + 80; x += spacing) {
-        blobs.push({ x, y: -35, r: 38, s: 1, type: 'border', ox: x, oy: -35, or: 38 });
+    const spacing = 40;
+    // Top
+    for (let x = -20; x <= canvas.width + 20; x += spacing) {
+        blobs.push({ x, y: -15, r: 35 + Math.random() * 10, type: 'border', ox: x, oy: -15, or: 35 + Math.random() * 10 });
     }
-    for (let y = -80; y <= canvas.height + 80; y += spacing) {
-        blobs.push({ x: -35, y, r: 38, s: 1, type: 'border', ox: -35, oy: y, or: 38 });
+    // Left
+    for (let y = -20; y <= canvas.height + 20; y += spacing) {
+        blobs.push({ x: -15, y, r: 35 + Math.random() * 10, type: 'border', ox: -15, oy: y, or: 35 + Math.random() * 10 });
     }
-    for (let y = -80; y <= canvas.height + 80; y += spacing) {
-        blobs.push({ x: canvas.width + 35, y, r: 38, s: 1, type: 'border', ox: canvas.width + 35, oy: y, or: 38 });
+    // Right
+    for (let y = -20; y <= canvas.height + 20; y += spacing) {
+        blobs.push({ x: canvas.width + 15, y, r: 35 + Math.random() * 10, type: 'border', ox: canvas.width + 15, oy: y, or: 35 + Math.random() * 10 });
     }
-    blobs.push({ x: -10, y: canvas.height + 30, r: 40, s: 1, type: 'border', ox: -10, oy: canvas.height + 30, or: 40 });
-    blobs.push({ x: canvas.width + 10, y: canvas.height + 30, r: 40, s: 1, type: 'border', ox: canvas.width + 10, oy: canvas.height + 30, or: 40 });
+    // Bottom
+    for (let x = -20; x <= canvas.width + 20; x += spacing) {
+        blobs.push({ x, y: canvas.height + 15, r: 30 + Math.random() * 8, type: 'border', ox: x, oy: canvas.height + 15, or: 30 + Math.random() * 8 });
+    }
 }
 
-// Ground blobs
 function addGroundBlobs() {
-    for (let x = -60; x <= canvas.width + 60; x += 50) {
-        const yOff = Math.sin(x * 0.012) * 10;
-        blobs.push({ x, y: 455 + yOff, r: 40, s: 1, type: 'ground' });
+    for (let x = -30; x <= canvas.width + 30; x += 35) {
+        const yOff = Math.sin(x * 0.013) * 12 + Math.sin(x * 0.037) * 5;
+        blobs.push({ x, y: 440 + yOff, r: 30, type: 'ground' });
     }
-    for (let x = -60; x <= canvas.width + 60; x += 55) {
-        blobs.push({ x, y: 505, r: 38, s: 1, type: 'ground' });
+    // Fill below
+    for (let x = -30; x <= canvas.width + 30; x += 40) {
+        blobs.push({ x, y: 490, r: 35, type: 'ground' });
     }
 }
 
-// Object blobs (merge with ground and border naturally)
 function addObjectBlobs() {
     // Tombstone
-    const t1x = 160;
-    blobs.push({ x: t1x, y: 425, r: 16, s: 1, type: 'object' });
-    blobs.push({ x: t1x, y: 408, r: 14, s: 1, type: 'object' });
-    blobs.push({ x: t1x, y: 393, r: 12, s: 1, type: 'object' });
-    blobs.push({ x: t1x, y: 380, r: 11, s: 1, type: 'object' });
+    const t1 = 160;
+    blobs.push({ x: t1, y: 420, r: 14, type: 'object' });
+    blobs.push({ x: t1, y: 405, r: 12, type: 'object' });
+    blobs.push({ x: t1, y: 392, r: 11, type: 'object' });
+    blobs.push({ x: t1, y: 380, r: 10, type: 'object' });
 
     // Cross
-    const cx = 330;
-    blobs.push({ x: cx, y: 432, r: 13, s: 1, type: 'object' });
-    blobs.push({ x: cx, y: 416, r: 11, s: 1, type: 'object' });
-    blobs.push({ x: cx, y: 402, r: 10, s: 1, type: 'object' });
-    blobs.push({ x: cx, y: 389, r: 9, s: 1, type: 'object' });
-    blobs.push({ x: cx, y: 377, r: 9, s: 1, type: 'object' });
-    blobs.push({ x: cx - 15, y: 395, r: 8, s: 1, type: 'object' });
-    blobs.push({ x: cx + 15, y: 395, r: 8, s: 1, type: 'object' });
-    blobs.push({ x: cx - 25, y: 395, r: 6, s: 1, type: 'object' });
-    blobs.push({ x: cx + 25, y: 395, r: 6, s: 1, type: 'object' });
+    const cx = 320;
+    blobs.push({ x: cx, y: 425, r: 11, type: 'object' });
+    blobs.push({ x: cx, y: 412, r: 10, type: 'object' });
+    blobs.push({ x: cx, y: 400, r: 9, type: 'object' });
+    blobs.push({ x: cx, y: 388, r: 9, type: 'object' });
+    blobs.push({ x: cx, y: 377, r: 8, type: 'object' });
+    blobs.push({ x: cx - 14, y: 393, r: 8, type: 'object' });
+    blobs.push({ x: cx + 14, y: 393, r: 8, type: 'object' });
+    blobs.push({ x: cx - 24, y: 393, r: 6, type: 'object' });
+    blobs.push({ x: cx + 24, y: 393, r: 6, type: 'object' });
 
-    // Tall spire
-    const sx = 540;
-    for (let i = 0; i < 7; i++) {
-        blobs.push({ x: sx, y: 440 - i * 15, r: 13 - i * 1.1, s: 1, type: 'object' });
+    // Spire
+    const sx = 530;
+    for (let i = 0; i < 8; i++) {
+        blobs.push({ x: sx, y: 430 - i * 14, r: 12 - i * 0.9, type: 'object' });
     }
 
     // Small mound
-    blobs.push({ x: 680, y: 440, r: 15, s: 1, type: 'object' });
-    blobs.push({ x: 680, y: 425, r: 12, s: 1, type: 'object' });
-    blobs.push({ x: 680, y: 412, r: 10, s: 1, type: 'object' });
+    blobs.push({ x: 680, y: 428, r: 13, type: 'object' });
+    blobs.push({ x: 680, y: 415, r: 11, type: 'object' });
+    blobs.push({ x: 680, y: 404, r: 9, type: 'object' });
 }
 
 createPlayerBlobs();
@@ -121,111 +104,38 @@ addBorderBlobs();
 addGroundBlobs();
 addObjectBlobs();
 
-// --- Field at a point (all blobs including player) ---
-function fieldAt(px, py) {
-    let sum = 0;
-    for (let i = 0; i < blobs.length; i++) {
-        const b = blobs[i];
-        const dx = px - b.x;
-        const dy = py - b.y;
-        const distSq = dx * dx + dy * dy;
-        if (distSq < 1) { sum += b.r * b.r * b.s; continue; }
-        sum += (b.r * b.r * b.s) / distSq;
-    }
-    return sum;
-}
-
-// Field WITHOUT player blobs (for collision detection)
-function fieldAtWithoutPlayer(px, py) {
-    let sum = 0;
-    for (let i = playerBlobs.length; i < blobs.length; i++) {
-        const b = blobs[i];
-        const dx = px - b.x;
-        const dy = py - b.y;
-        const distSq = dx * dx + dy * dy;
-        if (distSq < 1) { sum += b.r * b.r * b.s; continue; }
-        sum += (b.r * b.r * b.s) / distSq;
-    }
-    return sum;
-}
-
-// --- Render the metaball field ---
-function renderField() {
-    const imageData = offCtx.createImageData(W, H);
-    const data = imageData.data;
-
-    for (let py = 0; py < H; py++) {
-        const worldY = py * SCALE;
-        for (let px = 0; px < W; px++) {
-            const worldX = px * SCALE;
-            const val = fieldAt(worldX, worldY);
-            const idx = (py * W + px) * 4;
-            if (val >= THRESHOLD) {
-                data[idx] = 0;
-                data[idx + 1] = 0;
-                data[idx + 2] = 0;
-                data[idx + 3] = 255;
-            } else {
-                data[idx] = 255;
-                data[idx + 1] = 255;
-                data[idx + 2] = 255;
-                data[idx + 3] = 255;
-            }
-        }
-    }
-
-    offCtx.putImageData(imageData, 0, 0);
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(offscreen, 0, 0, canvas.width, canvas.height);
-}
-
-// --- Animate border blobs ---
+// --- Animation ---
 let time = 0;
 
-function animateBlobs() {
-    let idx = 0;
-    for (const b of blobs) {
+function animateBorderBlobs() {
+    for (let i = 0; i < blobs.length; i++) {
+        const b = blobs[i];
         if (b.type === 'border') {
-            b.x = b.ox + Math.sin(time * 0.6 + idx * 0.5) * 10;
-            b.y = b.oy + Math.cos(time * 0.4 + idx * 0.7) * 8;
-            b.r = b.or + Math.sin(time * 0.9 + idx * 0.3) * 5;
-            idx++;
+            b.x = b.ox + Math.sin(time * 0.5 + i * 0.4) * 8;
+            b.y = b.oy + Math.cos(time * 0.4 + i * 0.6) * 6;
+            b.r = b.or + Math.sin(time * 0.8 + i * 0.3) * 4;
         }
     }
 }
 
-// --- Update player blob positions ---
-function updatePlayerBlobs() {
-    const wingY = Math.sin(player.wingPhase) * 5;
-
-    // Body
-    playerBlobs[0].x = player.x;
-    playerBlobs[0].y = player.y;
-
-    // Left wing tip
-    playerBlobs[1].x = player.x - 22;
-    playerBlobs[1].y = player.y - 2 + wingY;
-
-    // Right wing tip
-    playerBlobs[2].x = player.x + 22;
-    playerBlobs[2].y = player.y - 2 + wingY;
-
-    // Left wing mid
-    playerBlobs[3].x = player.x - 12;
-    playerBlobs[3].y = player.y - 1 + wingY * 0.5;
-
-    // Right wing mid
-    playerBlobs[4].x = player.x + 12;
-    playerBlobs[4].y = player.y - 1 + wingY * 0.5;
+// --- Collision (simple distance check to static blobs) ---
+function isNearFluid(px, py, margin) {
+    for (const b of blobs) {
+        const dx = px - b.x;
+        const dy = py - b.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < b.r + margin) return true;
+    }
+    return false;
 }
 
 // --- Update ---
 function update() {
     time += 0.016;
-    animateBlobs();
+    animateBorderBlobs();
 
-    if (keys['ArrowLeft'] || keys['KeyA']) player.vx -= moveSpeed * 0.15;
-    if (keys['ArrowRight'] || keys['KeyD']) player.vx += moveSpeed * 0.15;
+    if (keys['ArrowLeft'] || keys['KeyA']) player.vx -= moveSpeed * 0.18;
+    if (keys['ArrowRight'] || keys['KeyD']) player.vx += moveSpeed * 0.18;
     if (keys['ArrowUp'] || keys['KeyW'] || keys['Space']) {
         player.vy = flapForce;
     }
@@ -236,35 +146,54 @@ function update() {
     const nextX = player.x + player.vx;
     const nextY = player.y + player.vy;
 
-    // Collision: check if next position would be inside world fluid
-    if (fieldAtWithoutPlayer(nextX, nextY) >= THRESHOLD * 0.7) {
-        // Push back - find safe position
-        player.vy *= -0.3;
+    // Simple collision: bounce off world blobs
+    if (isNearFluid(nextX, nextY, -5)) {
+        player.vy *= -0.2;
         player.vx *= 0.5;
     } else {
         player.x = nextX;
         player.y = nextY;
     }
 
-    // Hard bounds
-    if (player.x < 70) { player.x = 70; player.vx = 0; }
-    if (player.x > canvas.width - 70) { player.x = canvas.width - 70; player.vx = 0; }
-    if (player.y < 70) { player.y = 70; player.vy = 0; }
-    if (player.y > canvas.height - 70) { player.y = canvas.height - 70; player.vy = 0; }
+    // Bounds
+    if (player.x < 60) { player.x = 60; player.vx = 0; }
+    if (player.x > canvas.width - 60) { player.x = canvas.width - 60; player.vx = 0; }
+    if (player.y < 60) { player.y = 60; player.vy = 0; }
+    if (player.y > canvas.height - 60) { player.y = canvas.height - 60; player.vy = 0; }
 
-    player.wingPhase += 0.18;
-    updatePlayerBlobs();
+    player.wingPhase += 0.2;
 }
 
-// --- Render ---
+// --- Render (just draw circles, CSS does the merging) ---
 function render() {
-    renderField();
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Small white eye on the player so you can tell where you are
+    // Fill white background
     ctx.fillStyle = '#fff';
-    ctx.beginPath();
-    ctx.arc(player.x + 3, player.y - 1, 2, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = '#000';
+
+    // Draw world blobs as circles
+    for (const b of blobs) {
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // Draw player blobs
+    const wingY = Math.sin(player.wingPhase) * 5;
+    for (let i = 0; i < playerBlobs.length; i++) {
+        const pb = playerBlobs[i];
+        let x = player.x + pb.ox;
+        let y = player.y + pb.oy;
+        // Wing animation on wing blobs
+        if (i >= 1) y += wingY * (i <= 2 ? 1 : 0.5);
+
+        ctx.beginPath();
+        ctx.arc(x, y, pb.r, 0, Math.PI * 2);
+        ctx.fill();
+    }
 }
 
 function gameLoop() {

@@ -7,11 +7,15 @@
     <style>
         * { margin: 0; padding: 0; }
         body { background: #000; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; }
+        #wrapper {
+            filter: blur(8px) contrast(20);
+            background: #fff;
+        }
         canvas { display: block; }
     </style>
 </head>
 <body>
-    <canvas id="game"></canvas>
+    <div id="wrapper"><canvas id="game"></canvas></div>
     <script src="game.js"></script>
 </body>
 </html>
