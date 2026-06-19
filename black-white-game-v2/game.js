@@ -154,11 +154,13 @@ const player = {
     vx: 0,
     vy: 0,
     prevX: WORLD_W / 2,
-    prevY: WORLD_H / 2
+    prevY: WORLD_H / 2,
+    // Trail positions for fluid stretching effect
+    trail: []
 };
 
-const pmoveSpeed = 4;
-const pfriction = 0.88;
+const pmoveSpeed = 2.2;
+const pfriction = 0.96; // high = slippery/floaty like liquid
 
 const keys = {};
 window.addEventListener('keydown', e => { keys[e.code] = true; e.preventDefault(); });
@@ -269,22 +271,49 @@ function playerInteract() {
                 const dist = Math.sqrt(di * di + dj * dj);
                 if (dist < radius) {
                     const factor = (1 - dist / radius);
-                    vxPrev[IX(ci, cj)] += playerVx * factor * 8;
-                    vyPrev[IX(ci, cj)] += playerVy * factor * 8;
+                    vxPrev[IX(ci, cj)] += playerVx * factor * 6;
+                    vyPrev[IX(ci, cj)] += playerVy * factor * 6;
                     density[IX(ci, cj)] *= (0.4 + dist / radius * 0.6);
                 }
             }
         }
     }
 
-    // Player density (visible blob)
-    for (let di = -3; di <= 3; di++) {
-        for (let dj = -3; dj <= 3; dj++) {
+    // Store trail positions (for stretching droplet effect)
+    player.trail.unshift({ x: player.x, y: player.y });
+    if (player.trail.length > 8) player.trail.pop();
+
+    // Draw player as stretched droplet: main blob + trail blobs with decreasing size
+    // Main body
+    for (let di = -2; di <= 2; di++) {
+        for (let dj = -2; dj <= 2; dj++) {
             const ci = gi + di;
             const cj = gj + dj;
             if (ci > 0 && ci <= N && cj > 0 && cj <= M) {
-                if (di * di + dj * dj <= 9) {
+                if (di * di + dj * dj <= 4) {
                     density[IX(ci, cj)] = 100;
+                }
+            }
+        }
+    }
+
+    // Trail (creates stretching/droplet shape)
+    for (let t = 0; t < player.trail.length; t++) {
+        const tr = player.trail[t];
+        const ti = Math.floor(tr.x / SCALE);
+        const tj = Math.floor(tr.y / SCALE);
+        const trailR = Math.max(1, 2 - Math.floor(t / 3));
+        for (let di = -trailR; di <= trailR; di++) {
+            for (let dj = -trailR; dj <= trailR; dj++) {
+                const ci = ti + di;
+                const cj = tj + dj;
+                if (ci > 0 && ci <= N && cj > 0 && cj <= M) {
+                    if (di * di + dj * dj <= trailR * trailR) {
+                        const strength = 90 - t * 10;
+                        if (density[IX(ci, cj)] < strength) {
+                            density[IX(ci, cj)] = strength;
+                        }
+                    }
                 }
             }
         }
@@ -296,10 +325,11 @@ function update() {
     player.prevX = player.x;
     player.prevY = player.y;
 
-    if (keys['ArrowLeft'] || keys['KeyA']) player.vx -= pmoveSpeed * 0.2;
-    if (keys['ArrowRight'] || keys['KeyD']) player.vx += pmoveSpeed * 0.2;
-    if (keys['ArrowUp'] || keys['KeyW']) player.vy -= pmoveSpeed * 0.2;
-    if (keys['ArrowDown'] || keys['KeyS']) player.vy += pmoveSpeed * 0.2;
+    // Gentle acceleration, high inertia (like a liquid drop sliding)
+    if (keys['ArrowLeft'] || keys['KeyA']) player.vx -= pmoveSpeed * 0.12;
+    if (keys['ArrowRight'] || keys['KeyD']) player.vx += pmoveSpeed * 0.12;
+    if (keys['ArrowUp'] || keys['KeyW']) player.vy -= pmoveSpeed * 0.12;
+    if (keys['ArrowDown'] || keys['KeyS']) player.vy += pmoveSpeed * 0.12;
 
     player.vx *= pfriction;
     player.vy *= pfriction;
