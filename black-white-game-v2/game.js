@@ -4,12 +4,15 @@ const ctx = canvas.getContext('2d');
 canvas.width = 832;
 canvas.height = 520;
 
-// --- Navier-Stokes grid ---
+// --- World is much larger than the screen ---
 const SCALE = 4;
-const N = Math.floor(canvas.width / SCALE);
-const M = Math.floor(canvas.height / SCALE);
+const WORLD_W = 2400; // world pixel width
+const WORLD_H = 1600; // world pixel height
+const N = Math.floor(WORLD_W / SCALE); // grid cols
+const M = Math.floor(WORLD_H / SCALE); // grid rows
 const SIZE = (N + 2) * (M + 2);
 
+// Fluid fields
 let density = new Float32Array(SIZE);
 let densityPrev = new Float32Array(SIZE);
 let vx = new Float32Array(SIZE);
@@ -18,12 +21,13 @@ let vy = new Float32Array(SIZE);
 let vyPrev = new Float32Array(SIZE);
 
 const DT = 0.15;
-const DIFFUSION = 0.0002;
+const DIFFUSION = 0.0003;
 const VISCOSITY = 0.00005;
-const ITERATIONS = 4;
+const ITERATIONS = 3;
 
 function IX(x, y) { return x + (N + 2) * y; }
 
+// --- Navier-Stokes solver ---
 function setBoundary(b, field) {
     for (let i = 1; i <= N; i++) {
         field[IX(i, 0)] = b === 2 ? -field[IX(i, 1)] : field[IX(i, 1)];
@@ -143,28 +147,44 @@ function densityStep() {
     advect(0, density, densityPrev, vx, vy, DT);
 }
 
-// --- Player (top-down, free movement) ---
+// --- Player (world coordinates) ---
 const player = {
-    x: canvas.width / 2,
-    y: canvas.height / 2,
+    x: WORLD_W / 2,
+    y: WORLD_H / 2,
     vx: 0,
     vy: 0,
-    prevX: canvas.width / 2,
-    prevY: canvas.height / 2
+    prevX: WORLD_W / 2,
+    prevY: WORLD_H / 2
 };
 
-const pmoveSpeed = 3.5;
+const pmoveSpeed = 4;
 const pfriction = 0.88;
 
 const keys = {};
 window.addEventListener('keydown', e => { keys[e.code] = true; e.preventDefault(); });
 window.addEventListener('keyup', e => keys[e.code] = false);
 
-// --- Density sources: border ring + scattered objects ---
-function injectSources() {
-    const borderWidth = 8;
+// --- Camera ---
+const camera = { x: 0, y: 0 };
 
-    // Border ring - constant source of fluid creeping inward
+function updateCamera() {
+    // Smooth follow
+    const targetX = player.x - canvas.width / 2;
+    const targetY = player.y - canvas.height / 2;
+    camera.x += (targetX - camera.x) * 0.08;
+    camera.y += (targetY - camera.y) * 0.08;
+
+    // Clamp to world bounds
+    camera.x = Math.max(0, Math.min(WORLD_W - canvas.width, camera.x));
+    camera.y = Math.max(0, Math.min(WORLD_H - canvas.height, camera.y));
+}
+
+// --- World density sources ---
+// Border around the entire world edge
+function injectSources() {
+    const borderWidth = 10;
+
+    // World edges
     for (let i = 1; i <= N; i++) {
         for (let t = 0; t < borderWidth; t++) {
             density[IX(i, 1 + t)] = 100;
@@ -178,23 +198,14 @@ function injectSources() {
         }
     }
 
-    // Objects: fixed density blobs in the world
-    // These are like "islands" of fluid in the play area
-    const objects = [
-        { cx: N * 0.25, cy: M * 0.6, r: 5 },
-        { cx: N * 0.4, cy: M * 0.35, r: 4 },
-        { cx: N * 0.65, cy: M * 0.7, r: 6 },
-        { cx: N * 0.75, cy: M * 0.3, r: 4 },
-        { cx: N * 0.15, cy: M * 0.3, r: 3 },
-        { cx: N * 0.85, cy: M * 0.55, r: 5 },
-    ];
-
-    for (const obj of objects) {
-        const cx = Math.floor(obj.cx);
-        const cy = Math.floor(obj.cy);
-        for (let di = -obj.r; di <= obj.r; di++) {
-            for (let dj = -obj.r; dj <= obj.r; dj++) {
-                if (di * di + dj * dj <= obj.r * obj.r) {
+    // Scattered fluid objects throughout the world
+    for (const obj of worldObjects) {
+        const cx = Math.floor(obj.x / SCALE);
+        const cy = Math.floor(obj.y / SCALE);
+        const r = Math.floor(obj.r / SCALE);
+        for (let di = -r; di <= r; di++) {
+            for (let dj = -r; dj <= r; dj++) {
+                if (di * di + dj * dj <= r * r) {
                     const i = cx + di;
                     const j = cy + dj;
                     if (i > 0 && i <= N && j > 0 && j <= M) {
@@ -206,7 +217,43 @@ function injectSources() {
     }
 }
 
-// --- Player interacts with fluid ---
+// Generate objects spread across the world
+const worldObjects = [];
+function generateWorld() {
+    // Clusters of fluid blobs scattered around
+    const count = 30;
+    for (let k = 0; k < count; k++) {
+        const x = 150 + Math.random() * (WORLD_W - 300);
+        const y = 150 + Math.random() * (WORLD_H - 300);
+        const r = 20 + Math.random() * 40;
+        // Don't place too close to player start
+        const dx = x - WORLD_W / 2;
+        const dy = y - WORLD_H / 2;
+        if (Math.sqrt(dx * dx + dy * dy) < 150) continue;
+        worldObjects.push({ x, y, r });
+    }
+
+    // Some larger formations
+    for (let k = 0; k < 8; k++) {
+        const cx = 200 + Math.random() * (WORLD_W - 400);
+        const cy = 200 + Math.random() * (WORLD_H - 400);
+        const dx2 = cx - WORLD_W / 2;
+        const dy2 = cy - WORLD_H / 2;
+        if (Math.sqrt(dx2 * dx2 + dy2 * dy2) < 200) continue;
+        // Cluster of 3-5 blobs
+        const clusterSize = 3 + Math.floor(Math.random() * 3);
+        for (let c = 0; c < clusterSize; c++) {
+            worldObjects.push({
+                x: cx + (Math.random() - 0.5) * 60,
+                y: cy + (Math.random() - 0.5) * 60,
+                r: 25 + Math.random() * 30
+            });
+        }
+    }
+}
+generateWorld();
+
+// --- Player fluid interaction ---
 function playerInteract() {
     const gi = Math.floor(player.x / SCALE);
     const gj = Math.floor(player.y / SCALE);
@@ -222,17 +269,15 @@ function playerInteract() {
                 const dist = Math.sqrt(di * di + dj * dj);
                 if (dist < radius) {
                     const factor = (1 - dist / radius);
-                    // Push fluid velocity in player's direction
                     vxPrev[IX(ci, cj)] += playerVx * factor * 8;
                     vyPrev[IX(ci, cj)] += playerVy * factor * 8;
-                    // Player carves through - reduce density
-                    density[IX(ci, cj)] *= (0.5 + dist / radius * 0.5);
+                    density[IX(ci, cj)] *= (0.4 + dist / radius * 0.6);
                 }
             }
         }
     }
 
-    // Player is also a density source (part of the fluid) - set directly so it's visible
+    // Player density (visible blob)
     for (let di = -3; di <= 3; di++) {
         for (let dj = -3; dj <= 3; dj++) {
             const ci = gi + di;
@@ -251,7 +296,6 @@ function update() {
     player.prevX = player.x;
     player.prevY = player.y;
 
-    // 8-directional top-down movement
     if (keys['ArrowLeft'] || keys['KeyA']) player.vx -= pmoveSpeed * 0.2;
     if (keys['ArrowRight'] || keys['KeyD']) player.vx += pmoveSpeed * 0.2;
     if (keys['ArrowUp'] || keys['KeyW']) player.vy -= pmoveSpeed * 0.2;
@@ -262,45 +306,58 @@ function update() {
     player.x += player.vx;
     player.y += player.vy;
 
-    // Bounds
-    const margin = 40;
+    // World bounds
+    const margin = 60;
     if (player.x < margin) { player.x = margin; player.vx = 0; }
-    if (player.x > canvas.width - margin) { player.x = canvas.width - margin; player.vx = 0; }
+    if (player.x > WORLD_W - margin) { player.x = WORLD_W - margin; player.vx = 0; }
     if (player.y < margin) { player.y = margin; player.vy = 0; }
-    if (player.y > canvas.height - margin) { player.y = canvas.height - margin; player.vy = 0; }
+    if (player.y > WORLD_H - margin) { player.y = WORLD_H - margin; player.vy = 0; }
 
-    // Fluid
+    updateCamera();
+
+    // Fluid sim
     injectSources();
     playerInteract();
     velocityStep();
     densityStep();
 
-    // Gentle global decay to prevent over-saturation
+    // Decay
     for (let i = 0; i < SIZE; i++) {
-        density[i] *= 0.995;
+        density[i] *= 0.996;
     }
 }
 
-// --- Render ---
+// --- Render (only the visible portion) ---
 function render() {
     const imageData = ctx.createImageData(canvas.width, canvas.height);
     const data = imageData.data;
 
+    const camGi = Math.floor(camera.x / SCALE);
+    const camGj = Math.floor(camera.y / SCALE);
+    const viewCols = Math.ceil(canvas.width / SCALE);
+    const viewRows = Math.ceil(canvas.height / SCALE);
+
     for (let py = 0; py < canvas.height; py++) {
-        const gj = Math.floor(py / SCALE);
+        const gj = camGj + Math.floor(py / SCALE);
         for (let px = 0; px < canvas.width; px++) {
-            const gi = Math.floor(px / SCALE);
-            const d = density[IX(gi, gj)];
+            const gi = camGi + Math.floor(px / SCALE);
             const idx = (py * canvas.width + px) * 4;
 
-            if (d > 20) {
+            if (gi >= 0 && gi <= N + 1 && gj >= 0 && gj <= M + 1) {
+                const d = density[IX(gi, gj)];
+                if (d > 20) {
+                    data[idx] = 0;
+                    data[idx + 1] = 0;
+                    data[idx + 2] = 0;
+                } else {
+                    data[idx] = 255;
+                    data[idx + 1] = 255;
+                    data[idx + 2] = 255;
+                }
+            } else {
                 data[idx] = 0;
                 data[idx + 1] = 0;
                 data[idx + 2] = 0;
-            } else {
-                data[idx] = 255;
-                data[idx + 1] = 255;
-                data[idx + 2] = 255;
             }
             data[idx + 3] = 255;
         }
