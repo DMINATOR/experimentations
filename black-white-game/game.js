@@ -4,16 +4,21 @@ const ctx = canvas.getContext('2d');
 canvas.width = 832;
 canvas.height = 520;
 
-// Metaball grid resolution (lower = faster, blockier)
-const GRID_SIZE = 4;
-const COLS = Math.ceil(canvas.width / GRID_SIZE) + 1;
-const ROWS = Math.ceil(canvas.height / GRID_SIZE) + 1;
+// Use offscreen canvas at half resolution for performance
+const SCALE = 2;
+const W = Math.ceil(canvas.width / SCALE);
+const H = Math.ceil(canvas.height / SCALE);
+const offscreen = document.createElement('canvas');
+offscreen.width = W;
+offscreen.height = H;
+const offCtx = offscreen.getContext('2d');
+
 const THRESHOLD = 1.0;
 
 // --- Player ---
 const player = {
-    x: 400,
-    y: 200,
+    x: canvas.width / 2,
+    y: canvas.height / 2 - 40,
     vx: 0,
     vy: 0,
     wingPhase: 0
@@ -28,96 +33,79 @@ const keys = {};
 window.addEventListener('keydown', e => { keys[e.code] = true; e.preventDefault(); });
 window.addEventListener('keyup', e => keys[e.code] = false);
 
-// --- Blobs: everything is a blob in the fluid ---
-// Types: 'border', 'ground', 'object'
-// Each blob has: x, y, radius, strength
+// --- Blobs ---
 const blobs = [];
 
-// Border blobs - form the organic edge
 function addBorderBlobs() {
-    const spacing = 50;
-    // Top edge
-    for (let x = -50; x <= canvas.width + 50; x += spacing) {
-        blobs.push({ x, y: -20, r: 60 + Math.random() * 20, s: 1, type: 'border' });
+    const spacing = 70;
+    // Top - pushed far outside
+    for (let x = -80; x <= canvas.width + 80; x += spacing) {
+        blobs.push({ x, y: -40, r: 40, s: 1, type: 'border', ox: x, oy: -40, or: 40 });
     }
-    // Left edge
-    for (let y = -50; y <= canvas.height + 50; y += spacing) {
-        blobs.push({ x: -20, y, r: 55 + Math.random() * 20, s: 1, type: 'border' });
+    // Left
+    for (let y = -80; y <= canvas.height + 80; y += spacing) {
+        blobs.push({ x: -40, y, r: 40, s: 1, type: 'border', ox: -40, oy: y, or: 40 });
     }
-    // Right edge
-    for (let y = -50; y <= canvas.height + 50; y += spacing) {
-        blobs.push({ x: canvas.width + 20, y, r: 55 + Math.random() * 20, s: 1, type: 'border' });
+    // Right
+    for (let y = -80; y <= canvas.height + 80; y += spacing) {
+        blobs.push({ x: canvas.width + 40, y, r: 40, s: 1, type: 'border', ox: canvas.width + 40, oy: y, or: 40 });
     }
-    // Bottom edge (thinner, merges with ground)
-    for (let x = -50; x <= canvas.width + 50; x += spacing) {
-        blobs.push({ x, y: canvas.height + 20, r: 40 + Math.random() * 15, s: 1, type: 'border' });
-    }
+    // Bottom corners only (ground handles bottom)
+    blobs.push({ x: -20, y: canvas.height + 30, r: 45, s: 1, type: 'border', ox: -20, oy: canvas.height + 30, or: 45 });
+    blobs.push({ x: canvas.width + 20, y: canvas.height + 30, r: 45, s: 1, type: 'border', ox: canvas.width + 20, oy: canvas.height + 30, or: 45 });
 }
 
-// Ground blobs - the terrain floor
 function addGroundBlobs() {
-    const groundY = 420;
-    for (let x = -100; x <= canvas.width + 100; x += 35) {
-        const variation = Math.sin(x * 0.01) * 15 + Math.sin(x * 0.03) * 8;
-        blobs.push({
-            x, y: groundY + variation + 30, r: 50 + Math.random() * 15,
-            s: 1, type: 'ground'
-        });
+    // Main ground layer - a row of blobs at the bottom
+    for (let x = -50; x <= canvas.width + 50; x += 55) {
+        const yOff = Math.sin(x * 0.015) * 12;
+        blobs.push({ x, y: 460 + yOff, r: 45, s: 1, type: 'ground' });
     }
-    // Sub-surface fill
-    for (let x = -100; x <= canvas.width + 100; x += 45) {
-        blobs.push({
-            x, y: canvas.height - 20, r: 60,
-            s: 1, type: 'ground'
-        });
+    // Sub layer for solid fill below
+    for (let x = -50; x <= canvas.width + 50; x += 60) {
+        blobs.push({ x, y: 510, r: 40, s: 1, type: 'ground' });
     }
 }
 
-// Object blobs - tombstones, spires etc that merge with ground fluid
 function addObjectBlobs() {
-    // Tombstone 1 - cluster of blobs forming a rounded rectangle
-    const t1x = 180;
-    blobs.push({ x: t1x, y: 390, r: 22, s: 1, type: 'object' });
-    blobs.push({ x: t1x, y: 370, r: 20, s: 1, type: 'object' });
-    blobs.push({ x: t1x, y: 352, r: 18, s: 1, type: 'object' });
-    blobs.push({ x: t1x, y: 338, r: 16, s: 1, type: 'object' });
+    // Tombstone 1
+    const t1x = 150;
+    blobs.push({ x: t1x, y: 430, r: 18, s: 1, type: 'object' });
+    blobs.push({ x: t1x, y: 410, r: 16, s: 1, type: 'object' });
+    blobs.push({ x: t1x, y: 392, r: 14, s: 1, type: 'object' });
+    blobs.push({ x: t1x, y: 377, r: 13, s: 1, type: 'object' });
 
-    // Cross - blobs forming a cross shape
-    const cx = 350;
-    blobs.push({ x: cx, y: 400, r: 16, s: 1, type: 'object' });
-    blobs.push({ x: cx, y: 380, r: 14, s: 1, type: 'object' });
-    blobs.push({ x: cx, y: 360, r: 13, s: 1, type: 'object' });
-    blobs.push({ x: cx, y: 345, r: 12, s: 1, type: 'object' });
-    blobs.push({ x: cx, y: 330, r: 11, s: 1, type: 'object' });
-    // Arms
-    blobs.push({ x: cx - 18, y: 355, r: 11, s: 1, type: 'object' });
-    blobs.push({ x: cx + 18, y: 355, r: 11, s: 1, type: 'object' });
-    blobs.push({ x: cx - 30, y: 355, r: 9, s: 1, type: 'object' });
-    blobs.push({ x: cx + 30, y: 355, r: 9, s: 1, type: 'object' });
+    // Cross
+    const cx = 320;
+    blobs.push({ x: cx, y: 435, r: 14, s: 1, type: 'object' });
+    blobs.push({ x: cx, y: 418, r: 12, s: 1, type: 'object' });
+    blobs.push({ x: cx, y: 402, r: 11, s: 1, type: 'object' });
+    blobs.push({ x: cx, y: 388, r: 10, s: 1, type: 'object' });
+    blobs.push({ x: cx, y: 375, r: 10, s: 1, type: 'object' });
+    // Cross arms
+    blobs.push({ x: cx - 16, y: 395, r: 9, s: 1, type: 'object' });
+    blobs.push({ x: cx + 16, y: 395, r: 9, s: 1, type: 'object' });
+    blobs.push({ x: cx - 28, y: 395, r: 7, s: 1, type: 'object' });
+    blobs.push({ x: cx + 28, y: 395, r: 7, s: 1, type: 'object' });
 
-    // Spire - tall narrow cluster
-    const sx = 550;
-    for (let i = 0; i < 8; i++) {
-        blobs.push({
-            x: sx, y: 410 - i * 18,
-            r: 18 - i * 1.5, s: 1, type: 'object'
-        });
+    // Spire
+    const sx = 530;
+    for (let i = 0; i < 7; i++) {
+        blobs.push({ x: sx, y: 440 - i * 16, r: 14 - i * 1.2, s: 1, type: 'object' });
     }
 
-    // Another tombstone
+    // Small tombstone
     const t2x = 680;
-    blobs.push({ x: t2x, y: 395, r: 20, s: 1, type: 'object' });
-    blobs.push({ x: t2x, y: 375, r: 18, s: 1, type: 'object' });
-    blobs.push({ x: t2x, y: 358, r: 16, s: 1, type: 'object' });
-    blobs.push({ x: t2x, y: 345, r: 15, s: 1, type: 'object' });
+    blobs.push({ x: t2x, y: 435, r: 16, s: 1, type: 'object' });
+    blobs.push({ x: t2x, y: 418, r: 14, s: 1, type: 'object' });
+    blobs.push({ x: t2x, y: 404, r: 12, s: 1, type: 'object' });
 }
 
 addBorderBlobs();
 addGroundBlobs();
 addObjectBlobs();
 
-// --- Metaball field computation ---
-// Returns field strength at point (px, py)
+// --- Field computation ---
 function fieldAt(px, py) {
     let sum = 0;
     for (let i = 0; i < blobs.length; i++) {
@@ -125,69 +113,46 @@ function fieldAt(px, py) {
         const dx = px - b.x;
         const dy = py - b.y;
         const distSq = dx * dx + dy * dy;
-        const rSq = b.r * b.r;
-        // Smooth falloff: r^2 / dist^2
-        sum += (rSq * b.s) / distSq;
+        if (distSq < 1) { sum += b.r * b.r * b.s; continue; }
+        sum += (b.r * b.r * b.s) / distSq;
     }
     return sum;
 }
 
-// --- Marching squares for smooth contour ---
-// We compute the field on a grid and draw filled regions where field > threshold
-const fieldGrid = new Float32Array(COLS * ROWS);
-
-function computeField() {
-    for (let row = 0; row < ROWS; row++) {
-        for (let col = 0; col < COLS; col++) {
-            const px = col * GRID_SIZE;
-            const py = row * GRID_SIZE;
-            fieldGrid[row * COLS + col] = fieldAt(px, py);
-        }
-    }
-}
-
-// Simple rendering: fill pixels where field > threshold
+// --- Render metaball field to offscreen buffer ---
 function renderField() {
-    const imageData = ctx.createImageData(canvas.width, canvas.height);
+    const imageData = offCtx.createImageData(W, H);
     const data = imageData.data;
 
-    for (let row = 0; row < ROWS - 1; row++) {
-        for (let col = 0; col < COLS - 1; col++) {
-            const val = fieldGrid[row * COLS + col];
+    for (let py = 0; py < H; py++) {
+        for (let px = 0; px < W; px++) {
+            // Map back to full-res coords
+            const worldX = px * SCALE;
+            const worldY = py * SCALE;
+            const val = fieldAt(worldX, worldY);
+            const idx = (py * W + px) * 4;
             if (val >= THRESHOLD) {
-                // Fill this grid cell black
-                const startX = col * GRID_SIZE;
-                const startY = row * GRID_SIZE;
-                for (let py = startY; py < startY + GRID_SIZE && py < canvas.height; py++) {
-                    for (let px = startX; px < startX + GRID_SIZE && px < canvas.width; px++) {
-                        const idx = (py * canvas.width + px) * 4;
-                        data[idx] = 0;
-                        data[idx + 1] = 0;
-                        data[idx + 2] = 0;
-                        data[idx + 3] = 255;
-                    }
-                }
+                data[idx] = 0;
+                data[idx + 1] = 0;
+                data[idx + 2] = 0;
+                data[idx + 3] = 255;
             } else {
-                // White
-                const startX = col * GRID_SIZE;
-                const startY = row * GRID_SIZE;
-                for (let py = startY; py < startY + GRID_SIZE && py < canvas.height; py++) {
-                    for (let px = startX; px < startX + GRID_SIZE && px < canvas.width; px++) {
-                        const idx = (py * canvas.width + px) * 4;
-                        data[idx] = 255;
-                        data[idx + 1] = 255;
-                        data[idx + 2] = 255;
-                        data[idx + 3] = 255;
-                    }
-                }
+                data[idx] = 255;
+                data[idx + 1] = 255;
+                data[idx + 2] = 255;
+                data[idx + 3] = 255;
             }
         }
     }
 
-    ctx.putImageData(imageData, 0, 0);
+    offCtx.putImageData(imageData, 0, 0);
+
+    // Draw scaled up to main canvas
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(offscreen, 0, 0, canvas.width, canvas.height);
 }
 
-// --- Player (bat) drawn on top ---
+// --- Player drawing ---
 function drawBat(x, y, wingPhase) {
     ctx.save();
     ctx.translate(x, y);
@@ -200,51 +165,34 @@ function drawBat(x, y, wingPhase) {
     const wy = Math.sin(wingPhase) * 6;
     ctx.beginPath();
     ctx.moveTo(-4, 0);
-    ctx.quadraticCurveTo(-15, -9 + wy, -22, -2 + wy * 0.5);
-    ctx.quadraticCurveTo(-16, 3, -4, 1);
+    ctx.quadraticCurveTo(-14, -8 + wy, -20, -2 + wy * 0.5);
+    ctx.quadraticCurveTo(-15, 3, -4, 1);
     ctx.fill();
 
     ctx.beginPath();
     ctx.moveTo(4, 0);
-    ctx.quadraticCurveTo(15, -9 + wy, 22, -2 + wy * 0.5);
-    ctx.quadraticCurveTo(16, 3, 4, 1);
+    ctx.quadraticCurveTo(14, -8 + wy, 20, -2 + wy * 0.5);
+    ctx.quadraticCurveTo(15, 3, 4, 1);
     ctx.fill();
 
     ctx.restore();
 }
 
-// --- Collision: sample field at player position ---
+// --- Collision ---
 function isInFluid(px, py) {
     return fieldAt(px, py) >= THRESHOLD;
 }
 
-function findSurface(px, py, dy) {
-    // Move up until we're out of fluid
-    let y = py;
-    for (let i = 0; i < 60; i++) {
-        y += dy;
-        if (!isInFluid(px, y)) return y;
-    }
-    return py;
-}
-
-// --- Animate border blobs for fluid feel ---
+// --- Animate border blobs ---
 let time = 0;
-const borderBlobOriginals = [];
-for (const b of blobs) {
-    if (b.type === 'border') {
-        borderBlobOriginals.push({ x: b.x, y: b.y, r: b.r });
-    }
-}
 
 function animateBlobs() {
     let idx = 0;
     for (const b of blobs) {
         if (b.type === 'border') {
-            const orig = borderBlobOriginals[idx];
-            b.x = orig.x + Math.sin(time * 0.8 + idx * 0.5) * 8;
-            b.y = orig.y + Math.cos(time * 0.6 + idx * 0.7) * 6;
-            b.r = orig.r + Math.sin(time * 1.2 + idx * 0.3) * 5;
+            b.x = b.ox + Math.sin(time * 0.7 + idx * 0.6) * 12;
+            b.y = b.oy + Math.cos(time * 0.5 + idx * 0.8) * 10;
+            b.r = b.or + Math.sin(time * 1.0 + idx * 0.4) * 6;
             idx++;
         }
     }
@@ -264,33 +212,34 @@ function update() {
     player.vy += gravity;
     player.vx *= friction;
 
-    // Move and check collision
     player.x += player.vx;
     player.y += player.vy;
 
-    // Push player out of fluid
+    // Push out of fluid (simple: move up until free)
     if (isInFluid(player.x, player.y)) {
-        player.y = findSurface(player.x, player.y, -1);
+        for (let i = 0; i < 80; i++) {
+            player.y -= 2;
+            if (!isInFluid(player.x, player.y)) break;
+        }
         player.vy = 0;
     }
 
-    // Keep in bounds
-    if (player.x < 80) player.x = 80;
-    if (player.x > canvas.width - 80) player.x = canvas.width - 80;
-    if (player.y < 80) { player.y = 80; player.vy = 0; }
+    // Bounds
+    if (player.x < 60) { player.x = 60; player.vx = 0; }
+    if (player.x > canvas.width - 60) { player.x = canvas.width - 60; player.vx = 0; }
+    if (player.y < 60) { player.y = 60; player.vy = 0; }
 
     player.wingPhase += 0.2;
 }
 
 // --- Render ---
 function render() {
-    computeField();
     renderField();
     drawBat(player.x, player.y, player.wingPhase);
 
-    ctx.fillStyle = '#000';
+    ctx.fillStyle = '#fff';
     ctx.font = '11px monospace';
-    ctx.fillText('WASD / Arrows + Space to fly', 160, canvas.height - 6);
+    ctx.fillText('WASD / Arrows + Space to fly', 250, 505);
 }
 
 function gameLoop() {
