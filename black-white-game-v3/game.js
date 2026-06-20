@@ -32,6 +32,7 @@ const camera = { x: 0, y: 0 };
 // Types: 'ruin_wall', 'pillar', 'arch', 'altar', 'obelisk', 'statue'
 const structures = [];
 const relics = []; // special objects that permanently light an area
+const torches = []; // torches near structures, lit when player passes
 const litAreas = []; // areas permanently illuminated
 
 function generateWorld() {
@@ -70,6 +71,19 @@ function generateWorld() {
             lightRadius: 180 + Math.random() * 80,
             pulsePhase: Math.random() * Math.PI * 2
         });
+        // Torches around the settlement
+        const torchCount = 3 + Math.floor(Math.random() * 4);
+        for (let t = 0; t < torchCount; t++) {
+            const angle = (t / torchCount) * Math.PI * 2 + Math.random() * 0.5;
+            const dist = 60 + Math.random() * 60;
+            torches.push({
+                x: cx + Math.cos(angle) * dist,
+                y: cy + Math.sin(angle) * dist,
+                lit: false,
+                lightRadius: 50 + Math.random() * 20,
+                flickerPhase: Math.random() * Math.PI * 2
+            });
+        }
     }
 
     // Additional standalone relics
@@ -83,6 +97,20 @@ function generateWorld() {
             lightRadius: 140 + Math.random() * 60,
             pulsePhase: Math.random() * Math.PI * 2
         });
+    }
+
+    // Scattered torches throughout the world (along ancient paths)
+    for (let i = 0; i < 40; i++) {
+        const x = rng(150, WORLD_W - 150);
+        const y = rng(150, WORLD_H - 150);
+        if (Math.abs(x - WORLD_W / 2) < 150 && Math.abs(y - WORLD_H / 2) < 150) continue;
+        torches.push({
+            x, y,
+            lit: false,
+            lightRadius: 45 + Math.random() * 25,
+            flickerPhase: Math.random() * Math.PI * 2
+        });
+    }
     }
 }
 generateWorld();
@@ -135,14 +163,44 @@ function drawObelisk(x, y) {
 
 function drawStatue(x, y) {
     ctx.fillStyle = '#bbb';
-    // Rough humanoid shape
     ctx.beginPath();
     ctx.arc(x, y - 28, 6, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillRect(x - 5, y - 22, 10, 18);
-    // Base/pedestal
     ctx.fillStyle = '#999';
     ctx.fillRect(x - 10, y - 2, 20, 5);
+}
+
+function drawTorch(x, y, lit, time, flickerPhase) {
+    // Stick
+    ctx.fillStyle = '#665544';
+    ctx.fillRect(x - 2, y - 12, 4, 14);
+    // Base holder
+    ctx.fillStyle = '#887766';
+    ctx.fillRect(x - 4, y - 14, 8, 3);
+
+    if (lit) {
+        // Flame
+        const flicker = Math.sin(time * 12 + flickerPhase) * 2;
+        const flicker2 = Math.sin(time * 17 + flickerPhase) * 1.5;
+
+        // Outer flame glow
+        const grd = ctx.createRadialGradient(x, y - 18, 0, x + flicker2, y - 22, 12);
+        grd.addColorStop(0, 'rgba(255, 220, 100, 0.9)');
+        grd.addColorStop(0.4, 'rgba(255, 180, 50, 0.6)');
+        grd.addColorStop(1, 'rgba(255, 120, 20, 0)');
+        ctx.fillStyle = grd;
+        ctx.beginPath();
+        ctx.arc(x + flicker2, y - 20, 12, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Inner bright flame
+        ctx.fillStyle = 'rgba(255, 255, 200, 0.9)';
+        ctx.beginPath();
+        ctx.moveTo(x - 3 + flicker2, y - 14);
+        ctx.quadraticCurveTo(x + flicker, y - 26 + flicker2, x + 3 + flicker2, y - 14);
+        ctx.fill();
+    }
 }
 
 function drawStructure(s, screenX, screenY) {
@@ -239,6 +297,26 @@ function applyDarkness(time) {
         lctx.fillStyle = relicGrd;
         lctx.beginPath();
         lctx.arc(rx, ry, pulse, 0, Math.PI * 2);
+        lctx.fill();
+    }
+
+    // Lit torch lights
+    for (const t of torches) {
+        if (!t.lit) continue;
+        const tx = t.x - camera.x;
+        const ty = t.y - camera.y;
+        const tr = t.lightRadius;
+        if (tx < -tr || tx > canvas.width + tr || ty < -tr || ty > canvas.height + tr) continue;
+
+        const flicker = tr + Math.sin(time * 10 + t.flickerPhase) * 4 + Math.sin(time * 7 + t.flickerPhase * 2) * 2;
+        const torchGrd = lctx.createRadialGradient(tx, ty - 16, 0, tx, ty - 16, flicker);
+        torchGrd.addColorStop(0, 'rgba(0,0,0,1)');
+        torchGrd.addColorStop(0.3, 'rgba(0,0,0,0.7)');
+        torchGrd.addColorStop(0.6, 'rgba(0,0,0,0.25)');
+        torchGrd.addColorStop(1, 'rgba(0,0,0,0)');
+        lctx.fillStyle = torchGrd;
+        lctx.beginPath();
+        lctx.arc(tx, ty - 16, flicker, 0, Math.PI * 2);
         lctx.fill();
     }
 
@@ -348,8 +426,18 @@ function update() {
             const dy = r.y - player.y;
             if (Math.sqrt(dx * dx + dy * dy) < 25) {
                 r.activated = true;
-                // Small expansion of player's light when relic is found
                 player.lightRadius += 8;
+            }
+        }
+    }
+
+    // Light torches when player passes near
+    for (const t of torches) {
+        if (!t.lit) {
+            const dx = t.x - player.x;
+            const dy = t.y - player.y;
+            if (Math.sqrt(dx * dx + dy * dy) < 40) {
+                t.lit = true;
             }
         }
     }
@@ -386,6 +474,16 @@ function render() {
         if (rx > -50 && rx < canvas.width + 50 &&
             ry > -50 && ry < canvas.height + 50) {
             drawRelic(r, rx, ry, time);
+        }
+    }
+
+    // Draw torches
+    for (const t of torches) {
+        const tx = t.x - camera.x;
+        const ty = t.y - camera.y;
+        if (tx > -50 && tx < canvas.width + 50 &&
+            ty > -50 && ty < canvas.height + 50) {
+            drawTorch(tx, ty, t.lit, time, t.flickerPhase);
         }
     }
 
