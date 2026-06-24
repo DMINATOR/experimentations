@@ -130,10 +130,11 @@ function placeObjects() {
     }
 }
 placeObjects();
+const relicsTotal = relics.length;
+let relicsCollected = 0;
 
 // --- Raycasting (efficient: only check tiles in light radius) ---
 function castLightPoly(lx, ly, radius) {
-    // Get nearby wall edges only
     const edges = [];
     const tileDist = Math.ceil(radius / TILE) + 1;
     const ltx = Math.floor(lx / TILE);
@@ -154,51 +155,208 @@ function castLightPoly(lx, ly, radius) {
         }
     }
 
-    // Collect angles to endpoints
+    // Collect angles to all edge endpoints + offsets
+    const angleSet = new Set();
     const angles = [];
+
     for (let i = 0; i < edges.length; i += 4) {
         const x1 = edges[i], y1 = edges[i + 1], x2 = edges[i + 2], y2 = edges[i + 3];
         const a1 = Math.atan2(y1 - ly, x1 - lx);
         const a2 = Math.atan2(y2 - ly, x2 - lx);
-        angles.push(a1 - 0.0001, a1, a1 + 0.0001);
-        angles.push(a2 - 0.0001, a2, a2 + 0.0001);
+        angles.push(a1 - 0.001, a1, a1 + 0.001);
+        angles.push(a2 - 0.001, a2, a2 + 0.001);
     }
-    // Fill in gaps
-    for (let i = 0; i < 60; i++) {
-        angles.push((i / 60) * Math.PI * 2 - Math.PI);
+
+    // More fill rays to prevent gaps in open areas
+    for (let i = 0; i < 120; i++) {
+        angles.push((i / 120) * Math.PI * 2 - Math.PI);
     }
     angles.sort((a, b) => a - b);
 
-    // Remove duplicates (close angles)
-    const filtered = [angles[0]];
-    for (let i = 1; i < angles.length; i++) {
-        if (angles[i] - filtered[filtered.length - 1] > 0.00005) {
-            filtered.push(angles[i]);
-        }
-    }
-
     // Cast rays
     const points = [];
-    for (const angle of filtered) {
+    for (let ai = 0; ai < angles.length; ai++) {
+        const angle = angles[ai];
         const rdx = Math.cos(angle);
         const rdy = Math.sin(angle);
         let closest = radius;
 
         for (let i = 0; i < edges.length; i += 4) {
-            const ex1 = edges[i], ey1 = edges[i + 1];
-            const ex = edges[i + 2] - ex1;
-            const ey = edges[i + 3] - ey1;
+            const sx = edges[i] - lx;
+            const sy = edges[i + 1] - ly;
+            const ex = edges[i + 2] - edges[i];
+            const ey = edges[i + 3] - edges[i + 1];
+
             const denom = rdx * ey - rdy * ex;
-            if (Math.abs(denom) < 0.00001) continue;
-            const t = ((ex1 - lx) * ey - (ey1 - ly) * ex) / denom;
-            const u = ((ex1 - lx) * rdy - (ey1 - ly) * rdx) / denom;
-            if (t > 0.1 && u >= 0 && u <= 1 && t < closest) {
+            if (Math.abs(denom) < 0.0001) continue;
+
+            const t = (sx * ey - sy * ex) / denom;
+            const u = (sx * rdy - sy * rdx) / denom;
+
+            if (t > 0.5 && u >= 0 && u <= 1 && t < closest) {
                 closest = t;
             }
         }
         points.push(lx + rdx * closest, ly + rdy * closest);
     }
     return points;
+}
+
+// --- The Shadow (unkillable enemy) ---
+const shadow = {
+    x: rooms[rooms.length - 1].cx * TILE + TILE / 2,
+    y: rooms[rooms.length - 1].cy * TILE + TILE / 2,
+    speed: 1.2,
+    darkRadius: 120,
+    extinguishRadius: 60,
+    path: [],
+    pathIndex: 0,
+    retargetTimer: 0,
+    tendrils: Array.from({ length: 8 }, (_, i) => ({
+        angle: (i / 8) * Math.PI * 2,
+        length: 15 + Math.random() * 10,
+        phase: Math.random() * Math.PI * 2
+    }))
+};
+
+// BFS pathfinding on tile grid
+function findPath(fromTX, fromTY, toTX, toTY) {
+    if (fromTX === toTX && fromTY === toTY) return [];
+    const visited = new Uint8Array(MAP_W * MAP_H);
+    const parent = new Int32Array(MAP_W * MAP_H).fill(-1);
+    const queue = [fromTY * MAP_W + fromTX];
+    visited[fromTY * MAP_W + fromTX] = 1;
+    const goal = toTY * MAP_W + toTX;
+    const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+    while (queue.length > 0) {
+        const cur = queue.shift();
+        if (cur === goal) {
+            // Reconstruct path
+            const path = [];
+            let c = cur;
+            while (c !== -1 && c !== fromTY * MAP_W + fromTX) {
+                const cx = c % MAP_W, cy = Math.floor(c / MAP_W);
+                path.unshift({ x: cx * TILE + TILE / 2, y: cy * TILE + TILE / 2 });
+                c = parent[c];
+            }
+            return path;
+        }
+        const cx = cur % MAP_W, cy = Math.floor(cur / MAP_W);
+        for (const [ddx, ddy] of dirs) {
+            const nx = cx + ddx, ny = cy + ddy;
+            if (nx < 0 || nx >= MAP_W || ny < 0 || ny >= MAP_H) continue;
+            const ni = ny * MAP_W + nx;
+            if (visited[ni] || tileAt(nx, ny) === 0) continue;
+            visited[ni] = 1;
+            parent[ni] = cur;
+            queue.push(ni);
+        }
+    }
+    return [];
+}
+
+function pickShadowTarget() {
+    // Prefer rooms with lit torches
+    const litRooms = rooms.filter(r =>
+        torches.some(t => t.lit &&
+            Math.abs(t.x - r.cx * TILE) < (r.w + 2) * TILE &&
+            Math.abs(t.y - r.cy * TILE) < (r.h + 2) * TILE)
+    );
+    const pool = litRooms.length > 0 ? litRooms : rooms;
+    const target = pool[Math.floor(Math.random() * pool.length)];
+
+    const fromTX = Math.floor(shadow.x / TILE);
+    const fromTY = Math.floor(shadow.y / TILE);
+    shadow.path = findPath(fromTX, fromTY, target.cx, target.cy);
+    shadow.pathIndex = 0;
+}
+pickShadowTarget();
+
+function updateShadow() {
+    shadow.retargetTimer -= 0.016;
+
+    // Follow BFS path
+    if (shadow.pathIndex < shadow.path.length) {
+        const wp = shadow.path[shadow.pathIndex];
+        const dx = wp.x - shadow.x;
+        const dy = wp.y - shadow.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist < 4) {
+            shadow.pathIndex++;
+        } else {
+            shadow.x += (dx / dist) * shadow.speed;
+            shadow.y += (dy / dist) * shadow.speed;
+        }
+    } else {
+        // Reached end, pick new target
+        if (shadow.retargetTimer <= 0) {
+            pickShadowTarget();
+            shadow.retargetTimer = 1.0;
+        }
+    }
+
+    // Extinguish nearby lit torches
+    for (const t of torches) {
+        if (!t.lit) continue;
+        const tdx = t.x - shadow.x;
+        const tdy = t.y - shadow.y;
+        if (tdx * tdx + tdy * tdy < shadow.extinguishRadius * shadow.extinguishRadius) {
+            t.lit = false;
+        }
+    }
+
+    // Animate tendrils
+    for (const tendril of shadow.tendrils) {
+        tendril.angle += Math.sin(time * 3 + tendril.phase) * 0.02;
+        tendril.length = 15 + Math.sin(time * 4 + tendril.phase) * 8;
+    }
+}
+
+function drawShadow() {
+    const sx = shadow.x - camera.x;
+    const sy = shadow.y - camera.y;
+    if (sx < -150 || sx > canvas.width + 150 || sy < -150 || sy > canvas.height + 150) return;
+
+    // Dark aura
+    const auraGrd = ctx.createRadialGradient(sx, sy, 5, sx, sy, 40);
+    auraGrd.addColorStop(0, 'rgba(10, 0, 20, 0.9)');
+    auraGrd.addColorStop(0.5, 'rgba(10, 0, 20, 0.4)');
+    auraGrd.addColorStop(1, 'rgba(10, 0, 20, 0)');
+    ctx.fillStyle = auraGrd;
+    ctx.beginPath();
+    ctx.arc(sx, sy, 40, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Tendrils — writhing dark arms
+    ctx.strokeStyle = 'rgba(20, 0, 40, 0.7)';
+    ctx.lineWidth = 2.5;
+    for (const tendril of shadow.tendrils) {
+        const ex = sx + Math.cos(tendril.angle) * tendril.length;
+        const ey = sy + Math.sin(tendril.angle) * tendril.length;
+        const cx1 = sx + Math.cos(tendril.angle + 0.3) * tendril.length * 0.5;
+        const cy1 = sy + Math.sin(tendril.angle + 0.3) * tendril.length * 0.5;
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.quadraticCurveTo(cx1, cy1, ex, ey);
+        ctx.stroke();
+    }
+
+    // Core — a dark void
+    ctx.fillStyle = '#050010';
+    ctx.beginPath();
+    ctx.arc(sx, sy, 7 + Math.sin(time * 5) * 1.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Inner "eye" — faint purple glow
+    const eyeGrd = ctx.createRadialGradient(sx, sy, 0, sx, sy, 4);
+    eyeGrd.addColorStop(0, 'rgba(120, 40, 160, 0.6)');
+    eyeGrd.addColorStop(1, 'rgba(80, 20, 120, 0)');
+    ctx.fillStyle = eyeGrd;
+    ctx.beginPath();
+    ctx.arc(sx, sy, 4, 0, Math.PI * 2);
+    ctx.fill();
 }
 
 // --- Drawing ---
@@ -325,16 +483,23 @@ function applyDarkness() {
         drawLightCutout(t.x, t.y, fl, 0.85);
     }
 
-    // Activated relics
-    for (const r of relics) {
-        if (!r.activated) continue;
-        const sx = r.x - camera.x;
-        const sy = r.y - camera.y;
-        if (sx < -r.lightRadius - 20 || sx > canvas.width + r.lightRadius + 20 ||
-            sy < -r.lightRadius - 20 || sy > canvas.height + r.lightRadius + 20) continue;
-        const pulse = r.lightRadius + Math.sin(time * 1.2 + r.pulsePhase) * 8;
-        drawLightCutout(r.x, r.y, pulse, 0.9);
-    }
+    // (Relics are removed on pickup — no persistent light)
+
+    // Shadow's negative light — adds darkness around it (reverse of light cutout)
+    // Reset composite to additive darkness
+    lctx.globalCompositeOperation = 'source-over';
+    const sdx = shadow.x - camera.x;
+    const sdy = shadow.y - camera.y;
+    const darkPulse = shadow.darkRadius + Math.sin(time * 3) * 15;
+    const darkGrd = lctx.createRadialGradient(sdx, sdy, 0, sdx, sdy, darkPulse);
+    darkGrd.addColorStop(0, 'rgba(0, 0, 0, 0.95)');
+    darkGrd.addColorStop(0.4, 'rgba(0, 0, 0, 0.6)');
+    darkGrd.addColorStop(0.7, 'rgba(0, 0, 0, 0.2)');
+    darkGrd.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    lctx.fillStyle = darkGrd;
+    lctx.beginPath();
+    lctx.arc(sdx, sdy, darkPulse, 0, Math.PI * 2);
+    lctx.fill();
 
     // Draw darkness on top
     ctx.drawImage(lc, 0, 0);
@@ -377,15 +542,19 @@ function update() {
             if (dx * dx + dy * dy < 900) t.lit = true;
         }
     }
-    for (const rl of relics) {
+    for (let i = relics.length - 1; i >= 0; i--) {
+        const rl = relics[i];
         if (!rl.activated) {
             const dx = rl.x - player.x, dy = rl.y - player.y;
             if (dx * dx + dy * dy < 400) {
-                rl.activated = true;
                 player.lightRadius += 12;
+                relicsCollected++;
+                relics.splice(i, 1);
             }
         }
     }
+
+    updateShadow();
 
     const targetX = player.x - canvas.width / 2;
     const targetY = player.y - canvas.height / 2;
@@ -413,11 +582,12 @@ function render() {
     }
     drawPlayer();
     applyDarkness();
+    drawShadow();
 
     ctx.fillStyle = 'rgba(255,250,220,0.6)';
     ctx.font = '12px monospace';
-    const act = relics.filter(r => r.activated).length;
-    ctx.fillText(`Relics: ${act}/${relics.length}`, 12, 18);
+    const lit = torches.filter(t => t.lit).length;
+    ctx.fillText(`Torches: ${lit}/${torches.length}  |  Relics: ${relicsCollected}/${relicsTotal}`, 12, 18);
     ctx.fillText('WASD to move', 12, canvas.height - 8);
 }
 
