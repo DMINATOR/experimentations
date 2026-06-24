@@ -4,23 +4,94 @@ const ctx = canvas.getContext('2d');
 canvas.width = 832;
 canvas.height = 520;
 
-// --- World ---
-const WORLD_W = 3200;
-const WORLD_H = 3200;
+// --- Dungeon tile map ---
+const TILE = 32;
+const MAP_W = 60;
+const MAP_H = 60;
+const WORLD_W = MAP_W * TILE;
+const WORLD_H = MAP_H * TILE;
 
-// --- Player (the light) ---
+// 0 = wall, 1 = floor
+const map = new Uint8Array(MAP_W * MAP_H);
+
+function tileAt(tx, ty) {
+    if (tx < 0 || tx >= MAP_W || ty < 0 || ty >= MAP_H) return 0;
+    return map[ty * MAP_W + tx];
+}
+
+function setTile(tx, ty, v) {
+    if (tx >= 0 && tx < MAP_W && ty >= 0 && ty < MAP_H) {
+        map[ty * MAP_W + tx] = v;
+    }
+}
+
+// --- Dungeon generation ---
+const rooms = [];
+
+function carveRoom(x, y, w, h) {
+    const room = { x, y, w, h, cx: Math.floor(x + w / 2), cy: Math.floor(y + h / 2) };
+    for (let ty = y; ty < y + h; ty++) {
+        for (let tx = x; tx < x + w; tx++) {
+            setTile(tx, ty, 1);
+        }
+    }
+    rooms.push(room);
+}
+
+function carveCorridor(x1, y1, x2, y2) {
+    let x = x1, y = y1;
+    while (x !== x2) {
+        setTile(x, y, 1);
+        setTile(x, y + 1, 1);
+        x += x < x2 ? 1 : -1;
+    }
+    while (y !== y2) {
+        setTile(x, y, 1);
+        setTile(x + 1, y, 1);
+        y += y < y2 ? 1 : -1;
+    }
+}
+
+function generateDungeon() {
+    map.fill(0);
+    let attempts = 0;
+    while (rooms.length < 14 && attempts < 400) {
+        attempts++;
+        const w = 4 + Math.floor(Math.random() * 7);
+        const h = 4 + Math.floor(Math.random() * 7);
+        const x = 2 + Math.floor(Math.random() * (MAP_W - w - 4));
+        const y = 2 + Math.floor(Math.random() * (MAP_H - h - 4));
+        let overlaps = false;
+        for (const r of rooms) {
+            if (x - 2 < r.x + r.w && x + w + 2 > r.x && y - 2 < r.y + r.h && y + h + 2 > r.y) {
+                overlaps = true; break;
+            }
+        }
+        if (!overlaps) carveRoom(x, y, w, h);
+    }
+    for (let i = 1; i < rooms.length; i++) {
+        const a = rooms[i - 1], b = rooms[i];
+        carveCorridor(a.cx, a.cy, b.cx, a.cy);
+        carveCorridor(b.cx, a.cy, b.cx, b.cy);
+    }
+    for (let i = 0; i < 4; i++) {
+        const a = rooms[Math.floor(Math.random() * rooms.length)];
+        const b = rooms[Math.floor(Math.random() * rooms.length)];
+        if (a !== b) carveCorridor(a.cx, a.cy, b.cx, b.cy);
+    }
+}
+generateDungeon();
+
+// --- Player ---
+const startRoom = rooms[0];
 const player = {
-    x: WORLD_W / 2,
-    y: WORLD_H / 2,
-    vx: 0,
-    vy: 0,
-    lightRadius: 120,     // base radius of player's light
-    lightFlicker: 0,      // animation phase
+    x: startRoom.cx * TILE + TILE / 2,
+    y: startRoom.cy * TILE + TILE / 2,
+    vx: 0, vy: 0,
+    lightRadius: 160
 };
-
-const pmoveSpeed = 2.2;
-const pfriction = 0.91;
-
+const pmoveSpeed = 3;
+const pfriction = 0.82;
 const keys = {};
 window.addEventListener('keydown', e => { keys[e.code] = true; e.preventDefault(); });
 window.addEventListener('keyup', e => keys[e.code] = false);
@@ -28,483 +99,497 @@ window.addEventListener('keyup', e => keys[e.code] = false);
 // --- Camera ---
 const camera = { x: 0, y: 0 };
 
-// --- Ancient structures hidden in the dark ---
-// Types: 'ruin_wall', 'pillar', 'arch', 'altar', 'obelisk', 'statue'
-const structures = [];
-const relics = []; // special objects that permanently light an area
-const torches = []; // torches near structures, lit when player passes
-const litAreas = []; // areas permanently illuminated
+// --- Torches & relics ---
+const torches = [];
+const relics = [];
 
-function generateWorld() {
-    const rng = (min, max) => min + Math.random() * (max - min);
-
-    // Scattered ruins across the world
-    for (let i = 0; i < 60; i++) {
-        const x = rng(200, WORLD_W - 200);
-        const y = rng(200, WORLD_H - 200);
-        // Skip near player start
-        if (Math.abs(x - WORLD_W / 2) < 200 && Math.abs(y - WORLD_H / 2) < 200) continue;
-
-        const type = ['ruin_wall', 'pillar', 'arch', 'pillar', 'obelisk', 'statue'][Math.floor(Math.random() * 6)];
-        structures.push({ x, y, type, discovered: false });
-    }
-
-    // Clusters of ruins (old settlements)
-    for (let k = 0; k < 8; k++) {
-        const cx = rng(400, WORLD_W - 400);
-        const cy = rng(400, WORLD_H - 400);
-        if (Math.abs(cx - WORLD_W / 2) < 300 && Math.abs(cy - WORLD_H / 2) < 300) continue;
-        const count = 5 + Math.floor(Math.random() * 6);
-        for (let c = 0; c < count; c++) {
-            structures.push({
-                x: cx + rng(-120, 120),
-                y: cy + rng(-120, 120),
-                type: ['ruin_wall', 'pillar', 'arch'][Math.floor(Math.random() * 3)],
-                discovered: false
-            });
+function placeObjects() {
+    for (let ty = 0; ty < MAP_H; ty++) {
+        for (let tx = 0; tx < MAP_W; tx++) {
+            if (tileAt(tx, ty) !== 1) continue;
+            const nearWall = tileAt(tx - 1, ty) === 0 || tileAt(tx + 1, ty) === 0 ||
+                             tileAt(tx, ty - 1) === 0 || tileAt(tx, ty + 1) === 0;
+            if (nearWall && Math.random() < 0.015) {
+                torches.push({
+                    x: tx * TILE + TILE / 2, y: ty * TILE + TILE / 2,
+                    lit: false, lightRadius: 70 + Math.random() * 30,
+                    flickerPhase: Math.random() * Math.PI * 2
+                });
+            }
         }
-        // Each settlement has a relic at its center
-        relics.push({
-            x: cx + rng(-30, 30),
-            y: cy + rng(-30, 30),
-            activated: false,
-            lightRadius: 180 + Math.random() * 80,
-            pulsePhase: Math.random() * Math.PI * 2
-        });
-        // Torches around the settlement
-        const torchCount = 3 + Math.floor(Math.random() * 4);
-        for (let t = 0; t < torchCount; t++) {
-            const angle = (t / torchCount) * Math.PI * 2 + Math.random() * 0.5;
-            const dist = 60 + Math.random() * 60;
-            torches.push({
-                x: cx + Math.cos(angle) * dist,
-                y: cy + Math.sin(angle) * dist,
-                lit: false,
-                lightRadius: 50 + Math.random() * 20,
-                flickerPhase: Math.random() * Math.PI * 2
+    }
+    for (let i = 1; i < rooms.length; i++) {
+        if (Math.random() < 0.45) {
+            const r = rooms[i];
+            relics.push({
+                x: r.cx * TILE + TILE / 2, y: r.cy * TILE + TILE / 2,
+                activated: false, lightRadius: 150 + Math.random() * 50,
+                pulsePhase: Math.random() * Math.PI * 2
             });
         }
     }
+}
+placeObjects();
+const relicsTotal = relics.length;
+let relicsCollected = 0;
 
-    // Additional standalone relics
-    for (let i = 0; i < 6; i++) {
-        const x = rng(300, WORLD_W - 300);
-        const y = rng(300, WORLD_H - 300);
-        if (Math.abs(x - WORLD_W / 2) < 250 && Math.abs(y - WORLD_H / 2) < 250) continue;
-        relics.push({
-            x, y,
-            activated: false,
-            lightRadius: 140 + Math.random() * 60,
-            pulsePhase: Math.random() * Math.PI * 2
-        });
+// --- Raycasting (efficient: only check tiles in light radius) ---
+function castLightPoly(lx, ly, radius) {
+    const edges = [];
+    const tileDist = Math.ceil(radius / TILE) + 1;
+    const ltx = Math.floor(lx / TILE);
+    const lty = Math.floor(ly / TILE);
+
+    for (let dy = -tileDist; dy <= tileDist; dy++) {
+        for (let dx = -tileDist; dx <= tileDist; dx++) {
+            const tx = ltx + dx;
+            const ty = lty + dy;
+            if (tx < 0 || tx >= MAP_W || ty < 0 || ty >= MAP_H) continue;
+            if (tileAt(tx, ty) !== 0) continue;
+            const wx = tx * TILE;
+            const wy = ty * TILE;
+            if (tileAt(tx, ty - 1) === 1) edges.push(wx, wy, wx + TILE, wy);
+            if (tileAt(tx, ty + 1) === 1) edges.push(wx, wy + TILE, wx + TILE, wy + TILE);
+            if (tileAt(tx - 1, ty) === 1) edges.push(wx, wy, wx, wy + TILE);
+            if (tileAt(tx + 1, ty) === 1) edges.push(wx + TILE, wy, wx + TILE, wy + TILE);
+        }
     }
 
-    // Scattered torches throughout the world (along ancient paths)
-    for (let i = 0; i < 40; i++) {
-        const x = rng(150, WORLD_W - 150);
-        const y = rng(150, WORLD_H - 150);
-        if (Math.abs(x - WORLD_W / 2) < 150 && Math.abs(y - WORLD_H / 2) < 150) continue;
-        torches.push({
-            x, y,
-            lit: false,
-            lightRadius: 45 + Math.random() * 25,
-            flickerPhase: Math.random() * Math.PI * 2
-        });
+    // Collect angles to all edge endpoints + offsets
+    const angleSet = new Set();
+    const angles = [];
+
+    for (let i = 0; i < edges.length; i += 4) {
+        const x1 = edges[i], y1 = edges[i + 1], x2 = edges[i + 2], y2 = edges[i + 3];
+        const a1 = Math.atan2(y1 - ly, x1 - lx);
+        const a2 = Math.atan2(y2 - ly, x2 - lx);
+        angles.push(a1 - 0.001, a1, a1 + 0.001);
+        angles.push(a2 - 0.001, a2, a2 + 0.001);
     }
+
+    // More fill rays to prevent gaps in open areas
+    for (let i = 0; i < 120; i++) {
+        angles.push((i / 120) * Math.PI * 2 - Math.PI);
     }
-}
-generateWorld();
+    angles.sort((a, b) => a - b);
 
-// --- Drawing structures ---
-function drawRuinWall(x, y) {
-    ctx.fillStyle = '#aaa';
-    // Broken wall segments
-    ctx.fillRect(x - 20, y - 5, 8, 18);
-    ctx.fillRect(x - 8, y - 8, 10, 22);
-    ctx.fillRect(x + 5, y - 3, 7, 15);
-    ctx.fillRect(x + 14, y - 6, 6, 12);
-}
+    // Cast rays
+    const points = [];
+    for (let ai = 0; ai < angles.length; ai++) {
+        const angle = angles[ai];
+        const rdx = Math.cos(angle);
+        const rdy = Math.sin(angle);
+        let closest = radius;
 
-function drawPillar(x, y) {
-    ctx.fillStyle = '#bbb';
-    ctx.fillRect(x - 4, y - 25, 8, 25);
-    // Base
-    ctx.fillRect(x - 7, y - 2, 14, 4);
-    // Capital (if not broken)
-    if (Math.random() > 0.3) {
-        ctx.fillRect(x - 6, y - 27, 12, 3);
+        for (let i = 0; i < edges.length; i += 4) {
+            const sx = edges[i] - lx;
+            const sy = edges[i + 1] - ly;
+            const ex = edges[i + 2] - edges[i];
+            const ey = edges[i + 3] - edges[i + 1];
+
+            const denom = rdx * ey - rdy * ex;
+            if (Math.abs(denom) < 0.0001) continue;
+
+            const t = (sx * ey - sy * ex) / denom;
+            const u = (sx * rdy - sy * rdx) / denom;
+
+            if (t > 0.5 && u >= 0 && u <= 1 && t < closest) {
+                closest = t;
+            }
+        }
+        points.push(lx + rdx * closest, ly + rdy * closest);
     }
+    return points;
 }
 
-function drawArch(x, y) {
-    ctx.strokeStyle = '#aaa';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.arc(x, y - 10, 18, Math.PI, 0);
-    ctx.stroke();
-    // Pillars on each side
-    ctx.fillStyle = '#999';
-    ctx.fillRect(x - 20, y - 10, 5, 25);
-    ctx.fillRect(x + 15, y - 10, 5, 25);
-}
+// --- The Shadow (unkillable enemy) ---
+const shadow = {
+    x: rooms[rooms.length - 1].cx * TILE + TILE / 2,
+    y: rooms[rooms.length - 1].cy * TILE + TILE / 2,
+    speed: 1.2,
+    darkRadius: 120,
+    extinguishRadius: 60,
+    path: [],
+    pathIndex: 0,
+    retargetTimer: 0,
+    tendrils: Array.from({ length: 8 }, (_, i) => ({
+        angle: (i / 8) * Math.PI * 2,
+        length: 15 + Math.random() * 10,
+        phase: Math.random() * Math.PI * 2
+    }))
+};
 
-function drawObelisk(x, y) {
-    ctx.fillStyle = '#ccc';
-    // Tall narrow stone
-    ctx.beginPath();
-    ctx.moveTo(x, y - 40);
-    ctx.lineTo(x - 6, y);
-    ctx.lineTo(x + 6, y);
-    ctx.closePath();
-    ctx.fill();
-    // Base
-    ctx.fillRect(x - 9, y - 2, 18, 5);
-}
+// BFS pathfinding on tile grid
+function findPath(fromTX, fromTY, toTX, toTY) {
+    if (fromTX === toTX && fromTY === toTY) return [];
+    const visited = new Uint8Array(MAP_W * MAP_H);
+    const parent = new Int32Array(MAP_W * MAP_H).fill(-1);
+    const queue = [fromTY * MAP_W + fromTX];
+    visited[fromTY * MAP_W + fromTX] = 1;
+    const goal = toTY * MAP_W + toTX;
+    const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 
-function drawStatue(x, y) {
-    ctx.fillStyle = '#bbb';
-    ctx.beginPath();
-    ctx.arc(x, y - 28, 6, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillRect(x - 5, y - 22, 10, 18);
-    ctx.fillStyle = '#999';
-    ctx.fillRect(x - 10, y - 2, 20, 5);
-}
-
-function drawTorch(x, y, lit, time, flickerPhase) {
-    // Stick
-    ctx.fillStyle = '#665544';
-    ctx.fillRect(x - 2, y - 12, 4, 14);
-    // Base holder
-    ctx.fillStyle = '#887766';
-    ctx.fillRect(x - 4, y - 14, 8, 3);
-
-    if (lit) {
-        // Flame
-        const flicker = Math.sin(time * 12 + flickerPhase) * 2;
-        const flicker2 = Math.sin(time * 17 + flickerPhase) * 1.5;
-
-        // Outer flame glow
-        const grd = ctx.createRadialGradient(x, y - 18, 0, x + flicker2, y - 22, 12);
-        grd.addColorStop(0, 'rgba(255, 220, 100, 0.9)');
-        grd.addColorStop(0.4, 'rgba(255, 180, 50, 0.6)');
-        grd.addColorStop(1, 'rgba(255, 120, 20, 0)');
-        ctx.fillStyle = grd;
-        ctx.beginPath();
-        ctx.arc(x + flicker2, y - 20, 12, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Inner bright flame
-        ctx.fillStyle = 'rgba(255, 255, 200, 0.9)';
-        ctx.beginPath();
-        ctx.moveTo(x - 3 + flicker2, y - 14);
-        ctx.quadraticCurveTo(x + flicker, y - 26 + flicker2, x + 3 + flicker2, y - 14);
-        ctx.fill();
+    while (queue.length > 0) {
+        const cur = queue.shift();
+        if (cur === goal) {
+            // Reconstruct path
+            const path = [];
+            let c = cur;
+            while (c !== -1 && c !== fromTY * MAP_W + fromTX) {
+                const cx = c % MAP_W, cy = Math.floor(c / MAP_W);
+                path.unshift({ x: cx * TILE + TILE / 2, y: cy * TILE + TILE / 2 });
+                c = parent[c];
+            }
+            return path;
+        }
+        const cx = cur % MAP_W, cy = Math.floor(cur / MAP_W);
+        for (const [ddx, ddy] of dirs) {
+            const nx = cx + ddx, ny = cy + ddy;
+            if (nx < 0 || nx >= MAP_W || ny < 0 || ny >= MAP_H) continue;
+            const ni = ny * MAP_W + nx;
+            if (visited[ni] || tileAt(nx, ny) === 0) continue;
+            visited[ni] = 1;
+            parent[ni] = cur;
+            queue.push(ni);
+        }
     }
+    return [];
 }
 
-function drawStructure(s, screenX, screenY) {
-    ctx.save();
-    switch (s.type) {
-        case 'ruin_wall': drawRuinWall(screenX, screenY); break;
-        case 'pillar': drawPillar(screenX, screenY); break;
-        case 'arch': drawArch(screenX, screenY); break;
-        case 'obelisk': drawObelisk(screenX, screenY); break;
-        case 'statue': drawStatue(screenX, screenY); break;
-    }
-    ctx.restore();
-}
+function pickShadowTarget() {
+    // Prefer rooms with lit torches
+    const litRooms = rooms.filter(r =>
+        torches.some(t => t.lit &&
+            Math.abs(t.x - r.cx * TILE) < (r.w + 2) * TILE &&
+            Math.abs(t.y - r.cy * TILE) < (r.h + 2) * TILE)
+    );
+    const pool = litRooms.length > 0 ? litRooms : rooms;
+    const target = pool[Math.floor(Math.random() * pool.length)];
 
-// --- Draw relic (glowing orb when not activated, beacon when activated) ---
-function drawRelic(r, screenX, screenY, time) {
-    if (!r.activated) {
-        // Dim pulsing orb waiting to be discovered
-        const pulse = 0.3 + Math.sin(time * 2 + r.pulsePhase) * 0.15;
-        ctx.fillStyle = `rgba(255, 255, 200, ${pulse})`;
-        ctx.beginPath();
-        ctx.arc(screenX, screenY, 5, 0, Math.PI * 2);
-        ctx.fill();
-        // Faint glow
-        const grd = ctx.createRadialGradient(screenX, screenY, 0, screenX, screenY, 15);
-        grd.addColorStop(0, `rgba(255, 255, 180, ${pulse * 0.4})`);
-        grd.addColorStop(1, 'rgba(255, 255, 180, 0)');
-        ctx.fillStyle = grd;
-        ctx.beginPath();
-        ctx.arc(screenX, screenY, 15, 0, Math.PI * 2);
-        ctx.fill();
+    const fromTX = Math.floor(shadow.x / TILE);
+    const fromTY = Math.floor(shadow.y / TILE);
+    shadow.path = findPath(fromTX, fromTY, target.cx, target.cy);
+    shadow.pathIndex = 0;
+}
+pickShadowTarget();
+
+function updateShadow() {
+    shadow.retargetTimer -= 0.016;
+
+    // Follow BFS path
+    if (shadow.pathIndex < shadow.path.length) {
+        const wp = shadow.path[shadow.pathIndex];
+        const dx = wp.x - shadow.x;
+        const dy = wp.y - shadow.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist < 4) {
+            shadow.pathIndex++;
+        } else {
+            shadow.x += (dx / dist) * shadow.speed;
+            shadow.y += (dy / dist) * shadow.speed;
+        }
     } else {
-        // Activated: bright beacon
-        const pulse = 0.8 + Math.sin(time * 1.5 + r.pulsePhase) * 0.2;
-        ctx.fillStyle = `rgba(255, 255, 220, ${pulse})`;
-        ctx.beginPath();
-        ctx.arc(screenX, screenY, 6, 0, Math.PI * 2);
-        ctx.fill();
-        // Bright glow ring
-        ctx.strokeStyle = `rgba(255, 255, 200, ${pulse * 0.5})`;
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.arc(screenX, screenY, 10 + Math.sin(time * 3) * 2, 0, Math.PI * 2);
-        ctx.stroke();
-    }
-}
-
-// --- Light mask: everything starts dark, light reveals ---
-function applyDarkness(time) {
-    // Draw darkness overlay
-    // Use a temporary canvas to build the light mask
-    const lightCanvas = document.createElement('canvas');
-    lightCanvas.width = canvas.width;
-    lightCanvas.height = canvas.height;
-    const lctx = lightCanvas.getContext('2d');
-
-    // Start fully opaque black
-    lctx.fillStyle = '#000';
-    lctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    // Cut out light areas using destination-out composite
-    lctx.globalCompositeOperation = 'destination-out';
-
-    // Player's light (flickering)
-    const flicker = Math.sin(time * 8) * 3 + Math.sin(time * 13) * 2 + Math.sin(time * 21) * 1;
-    const playerR = player.lightRadius + flicker;
-    const px = player.x - camera.x;
-    const py = player.y - camera.y;
-
-    const playerGrd = lctx.createRadialGradient(px, py, 0, px, py, playerR);
-    playerGrd.addColorStop(0, 'rgba(0,0,0,1)');
-    playerGrd.addColorStop(0.5, 'rgba(0,0,0,0.8)');
-    playerGrd.addColorStop(0.8, 'rgba(0,0,0,0.3)');
-    playerGrd.addColorStop(1, 'rgba(0,0,0,0)');
-    lctx.fillStyle = playerGrd;
-    lctx.beginPath();
-    lctx.arc(px, py, playerR, 0, Math.PI * 2);
-    lctx.fill();
-
-    // Activated relic lights
-    for (const r of relics) {
-        if (!r.activated) continue;
-        const rx = r.x - camera.x;
-        const ry = r.y - camera.y;
-        if (rx < -r.lightRadius || rx > canvas.width + r.lightRadius ||
-            ry < -r.lightRadius || ry > canvas.height + r.lightRadius) continue;
-
-        const pulse = r.lightRadius + Math.sin(time * 1.2 + r.pulsePhase) * 10;
-        const relicGrd = lctx.createRadialGradient(rx, ry, 0, rx, ry, pulse);
-        relicGrd.addColorStop(0, 'rgba(0,0,0,1)');
-        relicGrd.addColorStop(0.4, 'rgba(0,0,0,0.7)');
-        relicGrd.addColorStop(0.7, 'rgba(0,0,0,0.3)');
-        relicGrd.addColorStop(1, 'rgba(0,0,0,0)');
-        lctx.fillStyle = relicGrd;
-        lctx.beginPath();
-        lctx.arc(rx, ry, pulse, 0, Math.PI * 2);
-        lctx.fill();
+        // Reached end, pick new target
+        if (shadow.retargetTimer <= 0) {
+            pickShadowTarget();
+            shadow.retargetTimer = 1.0;
+        }
     }
 
-    // Lit torch lights
+    // Extinguish nearby lit torches
     for (const t of torches) {
         if (!t.lit) continue;
-        const tx = t.x - camera.x;
-        const ty = t.y - camera.y;
-        const tr = t.lightRadius;
-        if (tx < -tr || tx > canvas.width + tr || ty < -tr || ty > canvas.height + tr) continue;
-
-        const flicker = tr + Math.sin(time * 10 + t.flickerPhase) * 4 + Math.sin(time * 7 + t.flickerPhase * 2) * 2;
-        const torchGrd = lctx.createRadialGradient(tx, ty - 16, 0, tx, ty - 16, flicker);
-        torchGrd.addColorStop(0, 'rgba(0,0,0,1)');
-        torchGrd.addColorStop(0.3, 'rgba(0,0,0,0.7)');
-        torchGrd.addColorStop(0.6, 'rgba(0,0,0,0.25)');
-        torchGrd.addColorStop(1, 'rgba(0,0,0,0)');
-        lctx.fillStyle = torchGrd;
-        lctx.beginPath();
-        lctx.arc(tx, ty - 16, flicker, 0, Math.PI * 2);
-        lctx.fill();
+        const tdx = t.x - shadow.x;
+        const tdy = t.y - shadow.y;
+        if (tdx * tdx + tdy * tdy < shadow.extinguishRadius * shadow.extinguishRadius) {
+            t.lit = false;
+        }
     }
 
-    // Draw the darkness mask on top of the game
-    ctx.drawImage(lightCanvas, 0, 0);
-}
-
-// --- Ground texture (subtle grid/cracks in the stone floor) ---
-function drawGround() {
-    ctx.fillStyle = '#1a1a1a';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    // Subtle stone tile grid
-    ctx.strokeStyle = '#222';
-    ctx.lineWidth = 0.5;
-    const tileSize = 40;
-    const offX = camera.x % tileSize;
-    const offY = camera.y % tileSize;
-    for (let x = -offX; x < canvas.width; x += tileSize) {
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, canvas.height);
-        ctx.stroke();
-    }
-    for (let y = -offY; y < canvas.height; y += tileSize) {
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(canvas.width, y);
-        ctx.stroke();
+    // Animate tendrils
+    for (const tendril of shadow.tendrils) {
+        tendril.angle += Math.sin(time * 3 + tendril.phase) * 0.02;
+        tendril.length = 15 + Math.sin(time * 4 + tendril.phase) * 8;
     }
 }
 
-// --- Draw player (small glowing figure) ---
-function drawPlayer(time) {
+function drawShadow() {
+    const sx = shadow.x - camera.x;
+    const sy = shadow.y - camera.y;
+    if (sx < -150 || sx > canvas.width + 150 || sy < -150 || sy > canvas.height + 150) return;
+
+    // Dark aura
+    const auraGrd = ctx.createRadialGradient(sx, sy, 5, sx, sy, 40);
+    auraGrd.addColorStop(0, 'rgba(10, 0, 20, 0.9)');
+    auraGrd.addColorStop(0.5, 'rgba(10, 0, 20, 0.4)');
+    auraGrd.addColorStop(1, 'rgba(10, 0, 20, 0)');
+    ctx.fillStyle = auraGrd;
+    ctx.beginPath();
+    ctx.arc(sx, sy, 40, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Tendrils — writhing dark arms
+    ctx.strokeStyle = 'rgba(20, 0, 40, 0.7)';
+    ctx.lineWidth = 2.5;
+    for (const tendril of shadow.tendrils) {
+        const ex = sx + Math.cos(tendril.angle) * tendril.length;
+        const ey = sy + Math.sin(tendril.angle) * tendril.length;
+        const cx1 = sx + Math.cos(tendril.angle + 0.3) * tendril.length * 0.5;
+        const cy1 = sy + Math.sin(tendril.angle + 0.3) * tendril.length * 0.5;
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.quadraticCurveTo(cx1, cy1, ex, ey);
+        ctx.stroke();
+    }
+
+    // Core — a dark void
+    ctx.fillStyle = '#050010';
+    ctx.beginPath();
+    ctx.arc(sx, sy, 7 + Math.sin(time * 5) * 1.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Inner "eye" — faint purple glow
+    const eyeGrd = ctx.createRadialGradient(sx, sy, 0, sx, sy, 4);
+    eyeGrd.addColorStop(0, 'rgba(120, 40, 160, 0.6)');
+    eyeGrd.addColorStop(1, 'rgba(80, 20, 120, 0)');
+    ctx.fillStyle = eyeGrd;
+    ctx.beginPath();
+    ctx.arc(sx, sy, 4, 0, Math.PI * 2);
+    ctx.fill();
+}
+
+// --- Drawing ---
+let time = 0;
+
+function drawDungeon() {
+    const startTX = Math.max(0, Math.floor(camera.x / TILE) - 1);
+    const startTY = Math.max(0, Math.floor(camera.y / TILE) - 1);
+    const endTX = Math.min(MAP_W, Math.ceil((camera.x + canvas.width) / TILE) + 1);
+    const endTY = Math.min(MAP_H, Math.ceil((camera.y + canvas.height) / TILE) + 1);
+
+    for (let ty = startTY; ty < endTY; ty++) {
+        for (let tx = startTX; tx < endTX; tx++) {
+            const sx = tx * TILE - camera.x;
+            const sy = ty * TILE - camera.y;
+            if (tileAt(tx, ty) === 1) {
+                ctx.fillStyle = '#1a1a1a';
+                ctx.fillRect(sx, sy, TILE, TILE);
+                ctx.strokeStyle = '#222';
+                ctx.lineWidth = 0.5;
+                ctx.strokeRect(sx, sy, TILE, TILE);
+            } else {
+                ctx.fillStyle = '#0a0a0a';
+                ctx.fillRect(sx, sy, TILE, TILE);
+            }
+        }
+    }
+}
+
+function drawTorch(x, y, lit, flickerPhase) {
+    ctx.fillStyle = '#554433';
+    ctx.fillRect(x - 1.5, y - 8, 3, 10);
+    ctx.fillStyle = '#776655';
+    ctx.fillRect(x - 3, y - 10, 6, 3);
+    if (lit) {
+        const f1 = Math.sin(time * 12 + flickerPhase) * 1.5;
+        const f2 = Math.sin(time * 17 + flickerPhase) * 1;
+        ctx.fillStyle = 'rgba(255, 250, 200, 0.85)';
+        ctx.beginPath();
+        ctx.moveTo(x - 2 + f2, y - 10);
+        ctx.quadraticCurveTo(x + f1, y - 19, x + 2 + f2, y - 10);
+        ctx.fill();
+    }
+}
+
+function drawRelic(r, sx, sy) {
+    const pulse = r.activated ? 0.8 + Math.sin(time * 1.5 + r.pulsePhase) * 0.2
+                              : 0.3 + Math.sin(time * 2 + r.pulsePhase) * 0.15;
+    ctx.fillStyle = `rgba(255, 255, 200, ${pulse})`;
+    ctx.beginPath();
+    ctx.arc(sx, sy, r.activated ? 6 : 4, 0, Math.PI * 2);
+    ctx.fill();
+}
+
+function drawPlayer() {
     const px = player.x - camera.x;
     const py = player.y - camera.y;
-
-    // Inner warm glow
-    const innerGrd = ctx.createRadialGradient(px, py, 0, px, py, 20);
-    innerGrd.addColorStop(0, 'rgba(255, 250, 220, 0.9)');
-    innerGrd.addColorStop(0.5, 'rgba(255, 240, 180, 0.4)');
-    innerGrd.addColorStop(1, 'rgba(255, 230, 150, 0)');
-    ctx.fillStyle = innerGrd;
-    ctx.beginPath();
-    ctx.arc(px, py, 20, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Core bright dot
     ctx.fillStyle = '#fff';
     ctx.beginPath();
-    ctx.arc(px, py, 3, 0, Math.PI * 2);
+    ctx.arc(px, py, 4, 0, Math.PI * 2);
     ctx.fill();
+    const grd = ctx.createRadialGradient(px, py, 0, px, py, 12);
+    grd.addColorStop(0, 'rgba(255, 250, 220, 0.6)');
+    grd.addColorStop(1, 'rgba(255, 250, 220, 0)');
+    ctx.fillStyle = grd;
+    ctx.beginPath();
+    ctx.arc(px, py, 12, 0, Math.PI * 2);
+    ctx.fill();
+}
 
-    // Small rays
-    ctx.strokeStyle = 'rgba(255, 250, 220, 0.3)';
-    ctx.lineWidth = 1;
-    const rayCount = 6;
-    for (let i = 0; i < rayCount; i++) {
-        const angle = (i / rayCount) * Math.PI * 2 + time * 0.5;
-        const len = 10 + Math.sin(time * 3 + i) * 4;
-        ctx.beginPath();
-        ctx.moveTo(px + Math.cos(angle) * 5, py + Math.sin(angle) * 5);
-        ctx.lineTo(px + Math.cos(angle) * len, py + Math.sin(angle) * len);
-        ctx.stroke();
+// --- Hard shadow darkness ---
+function applyDarkness() {
+    // Build a light mask canvas
+    const lc = document.createElement('canvas');
+    lc.width = canvas.width;
+    lc.height = canvas.height;
+    const lctx = lc.getContext('2d');
+
+    // Start fully dark
+    lctx.fillStyle = '#000';
+    lctx.fillRect(0, 0, canvas.width, canvas.height);
+    lctx.globalCompositeOperation = 'destination-out';
+
+    // Helper to draw a light polygon with gradient
+    function drawLightCutout(wx, wy, radius, intensityMod) {
+        const points = castLightPoly(wx, wy, radius);
+        if (points.length < 6) return;
+
+        const sx = wx - camera.x;
+        const sy = wy - camera.y;
+
+        lctx.save();
+        lctx.beginPath();
+        lctx.moveTo(points[0] - camera.x, points[1] - camera.y);
+        for (let i = 2; i < points.length; i += 2) {
+            lctx.lineTo(points[i] - camera.x, points[i + 1] - camera.y);
+        }
+        lctx.closePath();
+        lctx.clip();
+
+        // Radial gradient inside the visibility polygon
+        const grd = lctx.createRadialGradient(sx, sy, 0, sx, sy, radius);
+        grd.addColorStop(0, `rgba(0,0,0,${intensityMod})`);
+        grd.addColorStop(0.5, `rgba(0,0,0,${intensityMod * 0.7})`);
+        grd.addColorStop(0.8, `rgba(0,0,0,${intensityMod * 0.25})`);
+        grd.addColorStop(1, 'rgba(0,0,0,0)');
+        lctx.fillStyle = grd;
+        lctx.fillRect(sx - radius, sy - radius, radius * 2, radius * 2);
+        lctx.restore();
     }
+
+    // Player light
+    const flicker = player.lightRadius + Math.sin(time * 7) * 3 + Math.sin(time * 13) * 2;
+    drawLightCutout(player.x, player.y, flicker, 1.0);
+
+    // Lit torches
+    for (const t of torches) {
+        if (!t.lit) continue;
+        const sx = t.x - camera.x;
+        const sy = t.y - camera.y;
+        if (sx < -t.lightRadius - 20 || sx > canvas.width + t.lightRadius + 20 ||
+            sy < -t.lightRadius - 20 || sy > canvas.height + t.lightRadius + 20) continue;
+        const fl = t.lightRadius + Math.sin(time * 9 + t.flickerPhase) * 4;
+        drawLightCutout(t.x, t.y, fl, 0.85);
+    }
+
+    // (Relics are removed on pickup — no persistent light)
+
+    // Shadow's negative light — adds darkness around it (reverse of light cutout)
+    // Reset composite to additive darkness
+    lctx.globalCompositeOperation = 'source-over';
+    const sdx = shadow.x - camera.x;
+    const sdy = shadow.y - camera.y;
+    const darkPulse = shadow.darkRadius + Math.sin(time * 3) * 15;
+    const darkGrd = lctx.createRadialGradient(sdx, sdy, 0, sdx, sdy, darkPulse);
+    darkGrd.addColorStop(0, 'rgba(0, 0, 0, 0.95)');
+    darkGrd.addColorStop(0.4, 'rgba(0, 0, 0, 0.6)');
+    darkGrd.addColorStop(0.7, 'rgba(0, 0, 0, 0.2)');
+    darkGrd.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    lctx.fillStyle = darkGrd;
+    lctx.beginPath();
+    lctx.arc(sdx, sdy, darkPulse, 0, Math.PI * 2);
+    lctx.fill();
+
+    // Draw darkness on top
+    ctx.drawImage(lc, 0, 0);
+}
+
+// --- Wall collision ---
+function isWall(wx, wy) {
+    return tileAt(Math.floor(wx / TILE), Math.floor(wy / TILE)) === 0;
 }
 
 // --- Update ---
-let time = 0;
-
 function update() {
     time += 0.016;
 
-    // Player movement
-    if (keys['ArrowLeft'] || keys['KeyA']) player.vx -= pmoveSpeed * 0.15;
-    if (keys['ArrowRight'] || keys['KeyD']) player.vx += pmoveSpeed * 0.15;
-    if (keys['ArrowUp'] || keys['KeyW']) player.vy -= pmoveSpeed * 0.15;
-    if (keys['ArrowDown'] || keys['KeyS']) player.vy += pmoveSpeed * 0.15;
+    let ax = 0, ay = 0;
+    if (keys['ArrowLeft'] || keys['KeyA']) ax -= pmoveSpeed * 0.22;
+    if (keys['ArrowRight'] || keys['KeyD']) ax += pmoveSpeed * 0.22;
+    if (keys['ArrowUp'] || keys['KeyW']) ay -= pmoveSpeed * 0.22;
+    if (keys['ArrowDown'] || keys['KeyS']) ay += pmoveSpeed * 0.22;
 
-    player.vx *= pfriction;
-    player.vy *= pfriction;
-    player.x += player.vx;
-    player.y += player.vy;
+    player.vx = (player.vx + ax) * pfriction;
+    player.vy = (player.vy + ay) * pfriction;
 
-    // World bounds
-    const margin = 50;
-    if (player.x < margin) { player.x = margin; player.vx = 0; }
-    if (player.x > WORLD_W - margin) { player.x = WORLD_W - margin; player.vx = 0; }
-    if (player.y < margin) { player.y = margin; player.vy = 0; }
-    if (player.y > WORLD_H - margin) { player.y = WORLD_H - margin; player.vy = 0; }
+    const r = 5;
+    const nx = player.x + player.vx;
+    if (!isWall(nx - r, player.y) && !isWall(nx + r, player.y) &&
+        !isWall(nx - r, player.y - r) && !isWall(nx + r, player.y + r)) {
+        player.x = nx;
+    } else { player.vx = 0; }
 
-    // Mark structures as discovered when in light range
-    for (const s of structures) {
-        if (!s.discovered) {
-            const dx = s.x - player.x;
-            const dy = s.y - player.y;
-            if (Math.sqrt(dx * dx + dy * dy) < player.lightRadius * 0.7) {
-                s.discovered = true;
-            }
-        }
-    }
+    const ny = player.y + player.vy;
+    if (!isWall(player.x, ny - r) && !isWall(player.x, ny + r) &&
+        !isWall(player.x - r, ny) && !isWall(player.x + r, ny)) {
+        player.y = ny;
+    } else { player.vy = 0; }
 
-    // Activate relics when player touches them
-    for (const r of relics) {
-        if (!r.activated) {
-            const dx = r.x - player.x;
-            const dy = r.y - player.y;
-            if (Math.sqrt(dx * dx + dy * dy) < 25) {
-                r.activated = true;
-                player.lightRadius += 8;
-            }
-        }
-    }
-
-    // Light torches when player passes near
     for (const t of torches) {
         if (!t.lit) {
-            const dx = t.x - player.x;
-            const dy = t.y - player.y;
-            if (Math.sqrt(dx * dx + dy * dy) < 40) {
-                t.lit = true;
+            const dx = t.x - player.x, dy = t.y - player.y;
+            if (dx * dx + dy * dy < 900) t.lit = true;
+        }
+    }
+    for (let i = relics.length - 1; i >= 0; i--) {
+        const rl = relics[i];
+        if (!rl.activated) {
+            const dx = rl.x - player.x, dy = rl.y - player.y;
+            if (dx * dx + dy * dy < 400) {
+                player.lightRadius += 12;
+                relicsCollected++;
+                relics.splice(i, 1);
             }
         }
     }
 
-    // Camera
+    updateShadow();
+
     const targetX = player.x - canvas.width / 2;
     const targetY = player.y - canvas.height / 2;
-    camera.x += (targetX - camera.x) * 0.08;
-    camera.y += (targetY - camera.y) * 0.08;
+    camera.x += (targetX - camera.x) * 0.1;
+    camera.y += (targetY - camera.y) * 0.1;
     camera.x = Math.max(0, Math.min(WORLD_W - canvas.width, camera.x));
     camera.y = Math.max(0, Math.min(WORLD_H - canvas.height, camera.y));
 }
 
 // --- Render ---
 function render() {
-    // Dark ground
-    drawGround();
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    drawDungeon();
 
-    // Draw structures (only if near enough to potentially be visible)
-    const viewMargin = 300;
-    for (const s of structures) {
-        const sx = s.x - camera.x;
-        const sy = s.y - camera.y;
-        if (sx > -viewMargin && sx < canvas.width + viewMargin &&
-            sy > -viewMargin && sy < canvas.height + viewMargin) {
-            drawStructure(s, sx, sy);
-        }
-    }
-
-    // Draw relics
-    for (const r of relics) {
-        const rx = r.x - camera.x;
-        const ry = r.y - camera.y;
-        if (rx > -50 && rx < canvas.width + 50 &&
-            ry > -50 && ry < canvas.height + 50) {
-            drawRelic(r, rx, ry, time);
-        }
-    }
-
-    // Draw torches
     for (const t of torches) {
-        const tx = t.x - camera.x;
-        const ty = t.y - camera.y;
-        if (tx > -50 && tx < canvas.width + 50 &&
-            ty > -50 && ty < canvas.height + 50) {
-            drawTorch(tx, ty, t.lit, time, t.flickerPhase);
-        }
+        const sx = t.x - camera.x, sy = t.y - camera.y;
+        if (sx > -50 && sx < canvas.width + 50 && sy > -50 && sy < canvas.height + 50)
+            drawTorch(sx, sy, t.lit, t.flickerPhase);
     }
+    for (const rl of relics) {
+        const sx = rl.x - camera.x, sy = rl.y - camera.y;
+        if (sx > -50 && sx < canvas.width + 50 && sy > -50 && sy < canvas.height + 50)
+            drawRelic(rl, sx, sy);
+    }
+    drawPlayer();
+    applyDarkness();
+    drawShadow();
 
-    // Draw player
-    drawPlayer(time);
-
-    // Apply darkness (this is the key - covers everything not lit)
-    applyDarkness(time);
-
-    // UI
-    const activatedCount = relics.filter(r => r.activated).length;
-    ctx.fillStyle = 'rgba(255, 250, 220, 0.6)';
+    ctx.fillStyle = 'rgba(255,250,220,0.6)';
     ctx.font = '12px monospace';
-    ctx.fillText(`Relics: ${activatedCount}/${relics.length}`, 15, 20);
-    ctx.fillText('WASD to move', 15, canvas.height - 10);
+    const lit = torches.filter(t => t.lit).length;
+    ctx.fillText(`Torches: ${lit}/${torches.length}  |  Relics: ${relicsCollected}/${relicsTotal}`, 12, 18);
+    ctx.fillText('WASD to move', 12, canvas.height - 8);
 }
 
-function gameLoop() {
-    update();
-    render();
-    requestAnimationFrame(gameLoop);
-}
-
+function gameLoop() { update(); render(); requestAnimationFrame(gameLoop); }
 gameLoop();

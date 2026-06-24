@@ -5,13 +5,96 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bringer of Light</title>
     <style>
-        * { margin: 0; padding: 0; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body { background: #000; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; }
         canvas { display: block; }
+        .lore-btn {
+            position: fixed; top: 12px; right: 16px;
+            color: #c8b88a; background: none; border: none; cursor: pointer;
+            font-family: Georgia, serif; font-size: 14px;
+            opacity: 0.4; transition: opacity 0.3s; z-index: 20;
+        }
+        .lore-btn:hover { opacity: 1; }
+        #lore-overlay {
+            display: none; position: fixed; inset: 0;
+            background: rgba(0,0,0,0.92); z-index: 15;
+            overflow-y: auto;
+            font-family: Georgia, 'Times New Roman', serif;
+            color: #c8b88a;
+        }
+        #lore-overlay.open { display: flex; flex-direction: column; align-items: center; }
+        #lore-close {
+            position: fixed; top: 12px; right: 16px;
+            color: #c8b88a; background: none; border: none; cursor: pointer;
+            font-family: Georgia, serif; font-size: 14px;
+            opacity: 0.6; z-index: 25;
+        }
+        #lore-close:hover { opacity: 1; }
+        #lore-content {
+            max-width: 680px; width: 100%; padding: 60px 24px 80px;
+            line-height: 1.8; opacity: 0; animation: fadeIn 1s ease forwards;
+        }
+        @keyframes fadeIn { to { opacity: 1; } }
+        #lore-content h1 { font-size: 2.2em; color: #e8d8a8; text-align: center; margin-bottom: 8px; letter-spacing: 2px; text-shadow: 0 0 30px rgba(200,180,120,0.3); }
+        #lore-content h2 { font-size: 1.4em; color: #d4c494; margin-top: 40px; margin-bottom: 12px; border-bottom: 1px solid rgba(200,180,120,0.15); padding-bottom: 6px; }
+        #lore-content p { margin-bottom: 14px; font-size: 1.02em; }
+        #lore-content strong { color: #e8d8a8; }
+        #lore-content em { color: #a89868; }
+        #lore-content hr { border: none; border-top: 1px solid rgba(200,180,120,0.12); margin: 32px 0; }
+        #lore-content ul { list-style: none; padding: 0; }
+        #lore-content li { padding: 6px 0 6px 20px; position: relative; }
+        #lore-content li::before { content: '◆'; position: absolute; left: 0; color: #c8b88a; opacity: 0.4; font-size: 0.6em; top: 12px; }
+        #lore-content table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+        #lore-content th { text-align: left; color: #d4c494; border-bottom: 1px solid rgba(200,180,120,0.2); padding: 6px 10px; font-size: 0.95em; }
+        #lore-content td { padding: 6px 10px; border-bottom: 1px solid rgba(200,180,120,0.06); }
     </style>
 </head>
 <body>
+    <button class="lore-btn" onclick="document.getElementById('lore-overlay').classList.add('open')">Lore ◆</button>
+    <div id="lore-overlay">
+        <button id="lore-close" onclick="document.getElementById('lore-overlay').classList.remove('open')">✕ Close</button>
+        <div id="lore-content"></div>
+    </div>
     <canvas id="game"></canvas>
+    <script>
+        // Inline markdown renderer + lore content
+        (function() {
+            function md(text) {
+                let html = text
+                    .replace(/^---$/gm, '<hr>')
+                    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+                    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+                    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+                    .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
+                    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+                    .replace(/`(.+?)`/g, '<code>$1</code>');
+                html = html.replace(/^(\|.+\|)\n(\|[-| :]+\|)\n((?:\|.+\|\n?)*)/gm, function(m, header, sep, body) {
+                    var ths = header.split('|').filter(function(c){return c.trim()}).map(function(c){return '<th>'+c.trim()+'</th>'}).join('');
+                    var rows = body.trim().split('\n').map(function(row) {
+                        var tds = row.split('|').filter(function(c){return c.trim()}).map(function(c){return '<td>'+c.trim()+'</td>'}).join('');
+                        return '<tr>'+tds+'</tr>';
+                    }).join('');
+                    return '<table><thead><tr>'+ths+'</tr></thead><tbody>'+rows+'</tbody></table>';
+                });
+                html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+                html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+                var lines = html.split('\n'), result = [], inP = false;
+                for (var i = 0; i < lines.length; i++) {
+                    var t = lines[i].trim();
+                    if (!t) { if (inP) { result.push('</p>'); inP = false; } continue; }
+                    if (/^<(h[1-6]|hr|ul|li|table|thead|tbody|tr|th|td|\/)/i.test(t)) {
+                        if (inP) { result.push('</p>'); inP = false; }
+                        result.push(t);
+                    } else { if (!inP) { result.push('<p>'); inP = true; } result.push(t); }
+                }
+                if (inP) result.push('</p>');
+                return result.join('\n');
+            }
+            var lore = "# Bringer of Light\n\n## The Dimming\n\nLong ago, the world was lit by the **Eternal Flame** \u2014 a living light kept in the heart of a vast underground city. Civilizations thrived in its glow. Markets bustled in golden warmth, children played in corridors that never knew night, and the people believed the light would last forever.\n\nBut something consumed it. The people called it *The Dimming* \u2014 not a creature, not a storm, but an **absence**. Light simply\u2026 stopped. Torches refused to catch. Lanterns flickered and died. The Eternal Flame shrank to an ember, then to nothing.\n\nThe city fell silent. Its people vanished \u2014 not dead, just *gone*, as if light was what held them together. What remained were walls, relics, and darkness so deep it felt alive.\n\n---\n\n## The Spark\n\nYou are a **spark** \u2014 the last ember that escaped the Eternal Flame the moment before it was swallowed. You don\u2019t remember what you are. You don\u2019t know why you glow. You only know one thing: **move forward**.\n\nWhen you touch the old torches, they remember fire. When you find the relics, the world remembers itself \u2014 fragments of frozen memory play out before you: a merchant mid-sentence, a child\u2019s drawing on a wall, a warning carved too late.\n\n---\n\n## The Relics\n\nEach relic is a **fragment of memory** \u2014 a moment captured in light at the instant of The Dimming. They hold the truth of what happened:\n\n- **Merchant\u2019s Ledger** \u2014 *\u201CThe shadow merchants offered a trade. Endless night for endless wealth. We should have known...\u201D*\n- **Child\u2019s Drawing** \u2014 A crude sketch of a sun with a face. Below it: *\u201CWhen does it come back?\u201D*\n- **Captain\u2019s Warning** \u2014 *\u201CSeal the lower vaults. Whatever is down there, it isn\u2019t darkness. Darkness doesn\u2019t breathe.\u201D*\n- **Scholar\u2019s Notes** \u2014 *\u201CThe Flame isn\u2019t dying. It\u2019s being eaten. Something learned to feed on light itself.\u201D*\n- **Last Record** \u2014 *\u201CIf you\u2019re reading this, you are the light now. Don\u2019t go deeper. Don\u2019t\u2014\u201D*\n\n---\n\n## The Truth\n\nThe deeper you go, the more you learn: **The Dimming wasn\u2019t an accident.** Someone chose darkness. A pact was made \u2014 light for power \u2014 and the cost was everything.\n\nAnd they\u2019re still down here. Waiting. Not in the shadows.\n\n*They are the shadows.*\n\n---\n\n## Controls\n\n| Key | Action |\n|-----|--------|\n| **WASD** / **Arrow Keys** | Move |\n| **Space** | Interact with torches and relics |\n\n---\n\n*A game about bringing light to a world that lost it.*";
+            document.getElementById('lore-content').innerHTML = md(lore);
+        })();
+    </script>
     <script src="game.js"></script>
 </body>
 </html>

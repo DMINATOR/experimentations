@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bringer of Light — Lore</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            background: #0a0a0a;
+            color: #c8b88a;
+            font-family: 'Georgia', 'Times New Roman', serif;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .back-link {
+            position: fixed;
+            top: 20px;
+            left: 24px;
+            color: #c8b88a;
+            text-decoration: none;
+            font-size: 14px;
+            opacity: 0.6;
+            transition: opacity 0.3s;
+            z-index: 10;
+        }
+        .back-link:hover { opacity: 1; }
+
+        #content {
+            max-width: 680px;
+            width: 100%;
+            padding: 60px 24px 80px;
+            line-height: 1.8;
+            opacity: 0;
+            animation: fadeIn 1.5s ease forwards;
+        }
+
+        @keyframes fadeIn {
+            to { opacity: 1; }
+        }
+
+        #content h1 {
+            font-size: 2.4em;
+            color: #e8d8a8;
+            text-align: center;
+            margin-bottom: 8px;
+            letter-spacing: 2px;
+            text-shadow: 0 0 30px rgba(200, 180, 120, 0.3);
+        }
+
+        #content h2 {
+            font-size: 1.5em;
+            color: #d4c494;
+            margin-top: 48px;
+            margin-bottom: 16px;
+            border-bottom: 1px solid rgba(200, 180, 120, 0.15);
+            padding-bottom: 8px;
+        }
+
+        #content p {
+            margin-bottom: 16px;
+            font-size: 1.05em;
+        }
+
+        #content strong {
+            color: #e8d8a8;
+        }
+
+        #content em {
+            color: #a89868;
+            font-style: italic;
+        }
+
+        #content hr {
+            border: none;
+            border-top: 1px solid rgba(200, 180, 120, 0.12);
+            margin: 36px 0;
+        }
+
+        #content ul {
+            list-style: none;
+            padding: 0;
+        }
+
+        #content ul li {
+            padding: 8px 0 8px 20px;
+            position: relative;
+            font-size: 1.02em;
+        }
+
+        #content ul li::before {
+            content: '◆';
+            position: absolute;
+            left: 0;
+            color: #c8b88a;
+            opacity: 0.4;
+            font-size: 0.6em;
+            top: 14px;
+        }
+
+        #content table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 16px 0;
+        }
+
+        #content th {
+            text-align: left;
+            color: #d4c494;
+            border-bottom: 1px solid rgba(200, 180, 120, 0.2);
+            padding: 8px 12px;
+            font-size: 0.95em;
+        }
+
+        #content td {
+            padding: 8px 12px;
+            border-bottom: 1px solid rgba(200, 180, 120, 0.06);
+        }
+
+        #content code {
+            background: rgba(200, 180, 120, 0.1);
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 0.9em;
+        }
+
+        /* Glow effect around the page */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: radial-gradient(ellipse at 50% 20%, rgba(200, 180, 120, 0.04) 0%, transparent 70%);
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <a href="index.html" class="back-link">← Back to Game</a>
+    <div id="content"></div>
+
+    <script>
+        // Simple markdown-to-HTML converter (no dependencies)
+        function md(text) {
+            let html = text
+                // Horizontal rules
+                .replace(/^---$/gm, '<hr>')
+                // Headers
+                .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+                .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+                .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+                // Bold + italic
+                .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
+                // Bold
+                .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                // Italic
+                .replace(/\*(.+?)\*/g, '<em>$1</em>')
+                // Inline code
+                .replace(/`(.+?)`/g, '<code>$1</code>');
+
+            // Tables
+            html = html.replace(/^(\|.+\|)\n(\|[-| :]+\|)\n((?:\|.+\|\n?)*)/gm, (match, header, sep, body) => {
+                const ths = header.split('|').filter(c => c.trim()).map(c => `<th>${c.trim()}</th>`).join('');
+                const rows = body.trim().split('\n').map(row => {
+                    const tds = row.split('|').filter(c => c.trim()).map(c => `<td>${c.trim()}</td>`).join('');
+                    return `<tr>${tds}</tr>`;
+                }).join('');
+                return `<table><thead><tr>${ths}</tr></thead><tbody>${rows}</tbody></table>`;
+            });
+
+            // List items
+            html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+            html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+
+            // Paragraphs (lines that aren't already tagged)
+            const lines = html.split('\n');
+            const result = [];
+            let inP = false;
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed) {
+                    if (inP) { result.push('</p>'); inP = false; }
+                    continue;
+                }
+                if (/^<(h[1-6]|hr|ul|li|table|thead|tbody|tr|th|td|\/)/i.test(trimmed)) {
+                    if (inP) { result.push('</p>'); inP = false; }
+                    result.push(trimmed);
+                } else {
+                    if (!inP) { result.push('<p>'); inP = true; }
+                    result.push(trimmed);
+                }
+            }
+            if (inP) result.push('</p>');
+
+            return result.join('\n');
+        }
+
+        // Lore is inlined from lore.md so it works without a server (file:// protocol)
+        const loreText = `# Bringer of Light
+
+## The Dimming
+
+Long ago, the world was lit by the **Eternal Flame** — a living light kept in the heart of a vast underground city. Civilizations thrived in its glow. Markets bustled in golden warmth, children played in corridors that never knew night, and the people believed the light would last forever.
+
+But something consumed it. The people called it *The Dimming* — not a creature, not a storm, but an **absence**. Light simply… stopped. Torches refused to catch. Lanterns flickered and died. The Eternal Flame shrank to an ember, then to nothing.
+
+The city fell silent. Its people vanished — not dead, just *gone*, as if light was what held them together. What remained were walls, relics, and darkness so deep it felt alive.
+
+---
+
+## The Spark
+
+You are a **spark** — the last ember that escaped the Eternal Flame the moment before it was swallowed. You don\\'t remember what you are. You don\\'t know why you glow. You only know one thing: **move forward**.
+
+When you touch the old torches, they remember fire. When you find the relics, the world remembers itself — fragments of frozen memory play out before you: a merchant mid-sentence, a child\\'s drawing on a wall, a warning carved too late.
+
+---
+
+## The Relics
+
+Each relic is a **fragment of memory** — a moment captured in light at the instant of The Dimming. They hold the truth of what happened:
+
+- **Merchant\\'s Ledger** — *"The shadow merchants offered a trade. Endless night for endless wealth. We should have known..."*
+- **Child\\'s Drawing** — A crude sketch of a sun with a face. Below it: *"When does it come back?"*
+- **Captain\\'s Warning** — *"Seal the lower vaults. Whatever is down there, it isn\\'t darkness. Darkness doesn\\'t breathe."*
+- **Scholar\\'s Notes** — *"The Flame isn\\'t dying. It\\'s being eaten. Something learned to feed on light itself."*
+- **Last Record** — *"If you\\'re reading this, you are the light now. Don\\'t go deeper. Don\\'t—"*
+
+---
+
+## The Truth
+
+The deeper you go, the more you learn: **The Dimming wasn\\'t an accident.** Someone chose darkness. A pact was made — light for power — and the cost was everything.
+
+And they\\'re still down here. Waiting. Not in the shadows.
+
+*They are the shadows.*
+
+---
+
+## Controls
+
+| Key | Action |
+|-----|--------|
+| **WASD** / **Arrow Keys** | Move |
+| **Space** | Interact with torches and relics |
+
+---
+
+*A game about bringing light to a world that lost it.*`;
+
+        document.getElementById('content').innerHTML = md(loreText);
+    </script>
+</body>
+</html>
