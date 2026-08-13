@@ -1,0 +1,21 @@
+:root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #080b14; color: #eef2ff; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; background: radial-gradient(circle at top, #182141, #080b14 55%); }
+button, textarea { font: inherit; } button { cursor: pointer; }
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 24px; width: min(1200px, 100%); min-height: 100vh; margin: 0 auto; padding: 32px; }
+.game-panel, .memory-panel { border: 1px solid #293354; background: rgba(13, 18, 35, .88); box-shadow: 0 24px 80px rgba(0,0,0,.3); border-radius: 18px; }
+.game-panel { padding: 24px; } .memory-panel { align-self: start; padding: 22px; }
+.hud, .panel-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.eyebrow { margin: 0 0 6px; color: #8c9bd1; font-size: 11px; font-weight: 800; letter-spacing: .18em; }
+h1, h2 { margin: 0; line-height: 1; } h1 { font-size: clamp(32px, 5vw, 54px); } h2 { font-size: 24px; }
+.status { max-width: 260px; margin: 8px 0 0; color: #aeb9dc; text-align: right; }
+canvas { display: block; width: 100%; height: auto; margin: 26px 0 18px; border: 1px solid #33416d; border-radius: 12px; background: #101832; }
+.controls { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; color: #8f9bc0; font-size: 13px; }
+.controls p { margin: 0; } strong { color: #dbe2ff; }
+button { border: 1px solid #3f4d7a; border-radius: 9px; padding: 9px 13px; color: #eaf0ff; background: #202b4e; } button:hover { background: #2b3a68; }
+.primary { width: 100%; margin-top: 10px; border-color: #8274ff; background: #6357d9; } .primary:hover { background: #7569f2; }
+.hint { margin: 16px 0; color: #929fc4; font-size: 13px; line-height: 1.5; }
+textarea { display: block; width: 100%; resize: vertical; border: 1px solid #374573; border-radius: 9px; padding: 12px; color: #eef2ff; background: #0a1022; outline: none; } textarea:focus { border-color: #8274ff; }
+.count { display: grid; place-items: center; min-width: 28px; height: 28px; border-radius: 50%; color: #11162d; background: #b8b3ff; font-weight: 800; }
+.memory-list { display: grid; gap: 10px; padding: 0; margin: 18px 0 0; list-style: none; } .memory-list li { position: relative; padding: 12px 32px 12px 12px; border-left: 3px solid #8274ff; border-radius: 5px; color: #d7ddf7; background: #171f3a; font-size: 13px; line-height: 1.4; } .delete-memory { position: absolute; top: 7px; right: 6px; padding: 0 5px; border: 0; color: #929fc4; background: transparent; }
+@media (max-width: 800px) { .layout { grid-template-columns: 1fr; padding: 16px; } .memory-panel { order: -1; } .status { text-align: left; } .hud { display: block; } }

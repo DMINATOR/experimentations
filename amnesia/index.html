@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Amnesia — Loop Prototype</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="layout">
+    <section class="game-panel">
+      <div class="hud">
+        <div>
+          <p class="eyebrow">AMNESIA</p>
+          <h1>Loop <span id="loop-number">1</span></h1>
+        </div>
+        <p id="status" class="status">You wake with no memories.</p>
+      </div>
+      <canvas id="game-canvas" width="800" height="500" aria-label="The game world"></canvas>
+      <div class="controls">
+        <p><strong>Move:</strong> WASD or arrow keys</p>
+        <p><strong>Interact:</strong> E near the glowing marker</p>
+        <button id="reset-loop" type="button">Begin next loop</button>
+      </div>
+    </section>
+    <aside class="memory-panel">
+      <div class="panel-heading">
+        <div><p class="eyebrow">PERSISTENT KNOWLEDGE</p><h2>Memory notes</h2></div>
+        <span id="memory-count" class="count">0</span>
+      </div>
+      <p class="hint">Write down anything you want your future self to remember. These notes survive every loop.</p>
+      <textarea id="memory-input" rows="5" placeholder="The marker is important..."></textarea>
+      <button id="save-memory" class="primary" type="button">Save memory</button>
+      <ul id="memory-list" class="memory-list"></ul>
+    </aside>
+  </main>
+  <script src="game.js"></script>
+</body>
+</html>
